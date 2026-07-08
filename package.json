@@ -1,0 +1,19 @@
+{
+  "name": "aegis",
+  "version": "1.0.0",
+  "description": "Firewall for autonomous AI agents making on-chain USDC payments on Ethereum — analyzes recipient EVM bytecode + reputation before letting a transaction through (PAY / BLOCK / ASK_HUMAN).",
+  "type": "module",
+  "scripts": {
+    "balance": "node scripts/check-balance.js",
+    "deploy-bad": "node scripts/deploy-bad-contract.js",
+    "good": "node src/agent.js good",
+    "bad": "node src/agent.js bad"
+  },
+  "keywords": ["ethereum", "usdc", "ai-agent", "security", "evm", "bytecode"],
+  "author": "Akshat Odiya",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "viem": "^2.54.6"
+  }
+}

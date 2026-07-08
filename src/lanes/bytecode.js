@@ -1,0 +1,79 @@
+// bytecode lane - the real one.
+// pull the recipient's code with eth_getCode and scan the opcodes for
+// stuff that's usually bad news. this is the ethereum-native check: we're
+// reading the actual EVM instructions the recipient would run.
+import { publicClient } from '../config.js';
+
+// opcodes we flag + how much risk each adds
+const DANGER = {
+  0xff: { name: 'SELFDESTRUCT', score: 60, note: 'contract can self-destruct — classic honeypot / rug pattern' },
+  0xf4: { name: 'DELEGATECALL', score: 40, note: 'delegatecall — upgradeable/proxy, logic can be swapped out under you' },
+  0xf2: { name: 'CALLCODE',     score: 40, note: 'callcode — deprecated delegatecall variant, drainer-adjacent' },
+};
+
+// PUSH1..PUSH32 (0x60-0x7f) carry 1-32 data bytes right after them.
+// have to skip those or we'd read pushed data as if it were opcodes.
+function isPush(op) {
+  return op >= 0x60 && op <= 0x7f;
+}
+function pushLen(op) {
+  return op - 0x60 + 1;
+}
+
+// walk the code instruction by instruction, counting danger opcodes
+function scanOpcodes(hex) {
+  const bytes = Buffer.from(hex.slice(2), 'hex');
+  const hits = {};
+  for (let i = 0; i < bytes.length; i++) {
+    const op = bytes[i];
+    if (isPush(op)) {
+      i += pushLen(op); // skip the immediate data
+      continue;
+    }
+    const d = DANGER[op];
+    if (d) {
+      if (!hits[d.name]) hits[d.name] = { count: 0, score: d.score, note: d.note };
+      hits[d.name].count += 1;
+    }
+  }
+  return hits;
+}
+
+function levelFromScore(score) {
+  if (score >= 60) return 'HIGH';
+  if (score >= 30) return 'MEDIUM';
+  return 'LOW';
+}
+
+export async function checkBytecode(recipient) {
+  const code = await publicClient.getCode({ address: recipient });
+
+  // no code = a normal wallet (EOA). nothing to run, low risk.
+  if (!code || code === '0x') {
+    return {
+      lane: 'bytecode',
+      level: 'LOW',
+      score: 0,
+      isContract: false,
+      code: '0x',
+      reason: 'Recipient is a normal wallet (EOA) — no contract code to run.',
+      hits: {},
+    };
+  }
+
+  const hits = scanOpcodes(code);
+  const score = Object.values(hits).reduce((s, h) => s + h.score, 0);
+  const level = levelFromScore(score);
+
+  let reason;
+  if (score === 0) {
+    reason = `Recipient is a contract (${code.length / 2 - 1} bytes) with no known danger opcodes.`;
+  } else {
+    const parts = Object.entries(hits).map(
+      ([name, h]) => `${name}×${h.count} (${h.note})`,
+    );
+    reason = `Contract bytecode contains: ${parts.join('; ')}.`;
+  }
+
+  return { lane: 'bytecode', level, score, isContract: true, code, reason, hits };
+}

@@ -1,0 +1,13 @@
+# secrets — NEVER commit
+.env
+
+# deps
+node_modules/
+.npm-cache/
+
+# misc
+*.log
+.DS_Store
+
+# internal build brief — not part of the shipped project
+prompt.md
