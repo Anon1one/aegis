@@ -85,7 +85,7 @@ export function printVerdict(result) {
   const { decision, reasons, recipient, amount } = result;
   console.log('\n──────────────────────────────────────────────');
   console.log(`  AEGIS verdict for ${recipient}`);
-  console.log(`  paying ${amount} USDC`);
+  console.log(`  amount: ${amount} USDC`);
   console.log('──────────────────────────────────────────────');
   console.log(`  ${banner(decision)}\n`);
   for (const r of reasons) console.log(`  ${r}`);
