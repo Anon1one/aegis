@@ -83,6 +83,7 @@
   }
   .demo.good .banner { background: var(--green); color: #06210e; }
   .demo.bad .banner { background: var(--red); color: #2a0d0b; }
+  .demo.ask .banner { background: var(--amber); color: #241d05; }
   .demo .why { font-size: 14px; color: var(--muted); margin: 0 0 12px; }
   .demo .why b { color: var(--text); }
   .demo .link { font-size: 13px; }
@@ -169,7 +170,7 @@
   <section>
     <div class="wrap">
       <h2>Live on Sepolia</h2>
-      <p class="sub">Real transactions, not mockups. The PAY cases actually settled on-chain. The BLOCK cases never broadcast anything.</p>
+      <p class="sub">Real transactions, not mockups. The PAY case actually settled on-chain. BLOCK and ASK_HUMAN never broadcast anything.</p>
       <div class="demos">
         <div class="demo good">
           <div class="top"><span class="cmd"><b>node</b> src/agent.js good</span></div>
@@ -189,12 +190,12 @@
           </div>
         </div>
 
-        <div class="demo good">
+        <div class="demo ask">
           <div class="top"><span class="cmd"><b>node</b> src/agent.js approve good</span></div>
           <div class="body">
-            <span class="banner">PAY</span>
-            <p class="why">The spender's code is clean, so the allowance is safe to grant. <b>Real approve settled on-chain.</b></p>
-            <p class="link"><a href="https://sepolia.etherscan.io/tx/0x5a2d6d6130ffef4f7b55edc9b137d877b5ad457d5f732ea5f3dfc069a72dac8d">view approval on Etherscan</a></p>
+            <span class="banner">ASK_HUMAN</span>
+            <p class="why">Approving a plain wallet. A real spender is almost always a contract like a router or escrow, so an allowance to an EOA is a phishing red flag. <b>Aegis pauses for a human instead of auto-approving.</b></p>
+            <p class="link"><span class="mono">held for review</span></p>
           </div>
         </div>
 

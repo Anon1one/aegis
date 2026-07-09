@@ -44,13 +44,29 @@ Use a throwaway Sepolia test wallet. `.env` is gitignored, so keys never get com
 
 ```bash
 npm run deploy-bad        # deploy a malicious SELFDESTRUCT contract, paste its address into .env
-npm run good              # pay a normal wallet   -> PAY   -> real USDC goes out 
+npm run good              # pay a normal wallet   -> PAY   -> real USDC goes out
 npm run bad               # pay the bad contract  -> BLOCK -> money saved
+```
+
+It also guards the `approve` path, which is where agents usually get drained:
+
+```bash
+npm run approve-good      # approve a plain wallet    -> ASK_HUMAN (spenders are normally contracts)
+npm run approve-bad       # approve the bad contract  -> BLOCK
 ```
 
 The `PAY` case really settles on Sepolia:
 [here's the 10 USDC transfer](https://sepolia.etherscan.io/tx/0x962f16fa26f5dc8dea26d86c67ca859dfc86df58b055536cde20458bdde9275a).
-The `BLOCK` case never sends anything.
+The `BLOCK` and `ASK_HUMAN` cases never send anything.
+
+## Known limitations
+
+- The bytecode scan is a linear opcode walk, so it over-approximates: it can
+  tell you a dangerous opcode is present, not that it's reachable. The LLM
+  second pass exists to sanity-check the alarms it raises.
+- Reputation and behavior are mock lanes in V1 (empty lists, one amount
+  threshold). The bytecode lane is the real one.
+- Sepolia and USDC only.
 
 ## Built with
 
