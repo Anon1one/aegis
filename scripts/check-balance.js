@@ -1,5 +1,5 @@
-// Sanity check: print wallet USDC + ETH balance, and verify the USDC address.
-// Run this FIRST after filling .env — proves the connection before any logic.
+// quick sanity check - print wallet ETH + USDC and confirm the USDC address.
+// run this first after filling .env, before touching any of the logic.
 import { formatUnits, formatEther, erc20Abi } from 'viem';
 import { publicClient, account, addresses, assertAddress } from '../src/config.js';
 
@@ -12,11 +12,10 @@ async function main() {
   console.log(`\nWallet: ${account.address}`);
   console.log('Chain:  Sepolia\n');
 
-  // ETH (gas)
   const wei = await publicClient.getBalance({ address: account.address });
   console.log(`ETH balance:  ${formatEther(wei)} ETH`);
 
-  // USDC — read symbol/decimals to confirm we're pointing at real USDC
+  // read symbol/decimals too so we know we're pointing at the right token
   const [symbol, decimals, raw] = await Promise.all([
     publicClient.readContract({ address: usdc, abi: erc20Abi, functionName: 'symbol' }),
     publicClient.readContract({ address: usdc, abi: erc20Abi, functionName: 'decimals' }),

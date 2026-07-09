@@ -1,7 +1,6 @@
-// ── Reputation lane — MOCK (V1) ────────────────────────────────────────
-// In the real product this queries endpoint-reputation feeds (x402 settlement
-// history, shared denylists, etc.). For the buildathon it's a hardcoded map.
-// Roadmap: live reputation oracle.
+// reputation lane - mock for now.
+// real version would hit endpoint-reputation feeds (x402 history, shared
+// denylists). for the demo it's just two maps. roadmap: live reputation oracle.
 
 const DENYLIST = new Map([
   // address(lowercase) -> reason
@@ -11,10 +10,6 @@ const ALLOWLIST = new Map([
   // address(lowercase) -> reason
 ]);
 
-/**
- * @param {`0x${string}`} recipient
- * @returns {{lane:'reputation', level:string, reason:string, listed:string|null}}
- */
 export function checkReputation(recipient) {
   const key = recipient.toLowerCase();
 

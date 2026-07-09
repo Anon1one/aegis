@@ -1,13 +1,9 @@
-// ── Demo entrypoint: an AI agent tries to pay, but asks Aegis first ────
+// demo entrypoint. the "agent" is just a script that wants to pay someone,
+// but runs it past aegis first and only sends if the verdict is PAY.
 //
-// Usage:
-//   node src/agent.js good            # pay Recipient A (env GOOD_RECIPIENT)
-//   node src/agent.js bad             # pay Recipient B (env BAD_RECIPIENT)
-//   node src/agent.js <0xaddr> [amt]  # pay an arbitrary address
-//
-// The "agent" here is just a script: it decides it wants to pay, runs the
-// payment through Aegis, and only fires the real on-chain transfer if the
-// verdict is PAY.
+//   node src/agent.js good            pay recipient A (GOOD_RECIPIENT)
+//   node src/agent.js bad             pay recipient B (BAD_RECIPIENT)
+//   node src/agent.js <0xaddr> [amt]  pay any address
 import { aegisCheck, printVerdict, DECISION } from './aegis.js';
 import { payUSDC } from './pay.js';
 import { addresses, assertAddress } from './config.js';

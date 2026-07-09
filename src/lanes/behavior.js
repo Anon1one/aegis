@@ -1,21 +1,15 @@
-// ── Behavior lane — MOCK (V1) ──────────────────────────────────────────
-// In the real product this models spend velocity, anomaly detection, etc.
-// For the buildathon: a simple amount threshold + first-time-recipient nudge
-// toward ASK_HUMAN. Roadmap: full behavioral risk model.
+// behavior lane - mock for now.
+// real version would model spend velocity / anomalies. here it's just an
+// amount threshold + a first-time-recipient nudge toward ASK_HUMAN.
 
-// USDC amounts here are plain numbers (e.g. 50 = 50 USDC), not base units.
-const AMOUNT_THRESHOLD = 50; // over this to an unknown recipient → escalate
+// amounts are plain USDC numbers here (50 = 50 USDC), not base units
+const AMOUNT_THRESHOLD = 50;
 
-// Recipients we've "seen before" (mock memory).
+// recipients we've "seen before" (fake memory)
 const KNOWN = new Set([
-  // lowercase addresses we consider familiar
+  // lowercase addresses we treat as familiar
 ]);
 
-/**
- * @param {`0x${string}`} recipient
- * @param {number} amount  human USDC amount
- * @returns {{lane:'behavior', level:string, reason:string, escalate:boolean}}
- */
 export function checkBehavior(recipient, amount) {
   const firstTime = !KNOWN.has(recipient.toLowerCase());
   const large = amount > AMOUNT_THRESHOLD;

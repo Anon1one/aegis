@@ -1,8 +1,8 @@
-// ── Execute a real USDC (ERC-20) transfer on Sepolia ───────────────────
+// sends real USDC (erc20 transfer) on sepolia
 import { parseUnits, erc20Abi } from 'viem';
 import { publicClient, requireWallet, addresses, assertAddress } from './config.js';
 
-// USDC has 6 decimals. Cache it after the first read so we don't refetch.
+// usdc is 6 decimals, cache it after the first read
 let _decimals = null;
 async function usdcDecimals(usdc) {
   if (_decimals !== null) return _decimals;
@@ -11,16 +11,12 @@ async function usdcDecimals(usdc) {
       address: usdc, abi: erc20Abi, functionName: 'decimals',
     });
   } catch {
-    _decimals = 6; // USDC default
+    _decimals = 6;
   }
   return _decimals;
 }
 
-/**
- * Send `amount` USDC to `recipient`. Returns the tx hash after 1 confirmation.
- * @param {`0x${string}`} recipient
- * @param {number|string} amount  human USDC amount
- */
+// send `amount` USDC to recipient, wait for 1 confirmation, return the hash
 export async function payUSDC(recipient, amount) {
   const { walletClient, account } = requireWallet();
   const usdc = assertAddress('USDC_ADDRESS', addresses.usdc);

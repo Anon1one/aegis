@@ -1,22 +1,20 @@
-// Deploy Recipient B: a tiny contract whose runtime bytecode contains
-// SELFDESTRUCT (0xFF) so Aegis's bytecode lane flags it HIGH → BLOCK.
+// deploys recipient B: a tiny contract whose code contains SELFDESTRUCT, so
+// the bytecode lane flags it HIGH -> BLOCK. no solc needed, just raw bytecode.
 //
-// No Solidity compiler needed — we deploy raw, hand-crafted bytecode.
-//
-// Runtime bytecode we want on-chain:  0x6000ff
+// runtime we want on-chain is 0x6000ff:
 //   60 00   PUSH1 0x00
-//   ff      SELFDESTRUCT   <-- this is what the bytecode lane catches
+//   ff      SELFDESTRUCT   <- what the lane catches
 //
-// Init (constructor) code that returns that runtime:
-//   6003        PUSH1 0x03   ; runtime length = 3
-//   600c        PUSH1 0x0c   ; runtime starts at byte 12 in this code
+// and the constructor that returns that runtime:
+//   6003        PUSH1 0x03   (runtime length = 3)
+//   600c        PUSH1 0x0c   (runtime starts at byte 12)
 //   6000        PUSH1 0x00
-//   39          CODECOPY     ; copy runtime -> memory[0]
+//   39          CODECOPY     (copy runtime into memory[0])
 //   6003        PUSH1 0x03
 //   6000        PUSH1 0x00
-//   f3          RETURN       ; return memory[0..3] as the deployed code
+//   f3          RETURN       (return memory[0..3] as the deployed code)
 //
-// Full deploy payload = init(12 bytes) + runtime(3 bytes):
+// full payload = constructor (12 bytes) + runtime (3 bytes):
 const DEPLOY_BYTECODE = '0x6003600c60003960036000f36000ff';
 
 import { publicClient, requireWallet } from '../src/config.js';
@@ -34,7 +32,7 @@ async function main() {
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   const addr = receipt.contractAddress;
 
-  // Verify the on-chain runtime code is what we expect.
+  // double-check the deployed code is what we expect
   const code = await publicClient.getCode({ address: addr });
   console.log(`\n✅ Deployed at: ${addr}`);
   console.log(`   runtime code: ${code}  ${code === '0x6000ff' ? '(contains SELFDESTRUCT ✔)' : ''}`);
