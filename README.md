@@ -1,65 +1,57 @@
 # 🛡️ Aegis
 
-**A firewall for autonomous AI agents making on-chain USDC payments on Ethereum.**
+A firewall for AI agents that pay in USDC on Ethereum.
 
-An AI agent is about to send USDC. Aegis sits in the middle, inspects *where the money
-is going*, and returns one decision before the transaction fires:
+Before an agent sends money, Aegis looks at *who's getting paid* and gives one answer:
 
-- **PAY** — safe, let it through
+- **PAY** — looks safe, let it go
 - **BLOCK** — dangerous, stop it
-- **ASK_HUMAN** — uncertain, escalate to a human
+- **ASK_HUMAN** — not sure, ask a person
 
-## Why it's Ethereum-native
+## How it decides
 
-1. **USDC** — an ERC-20 stablecoin; the payment is a real on-chain Ethereum tx.
-2. **Bytecode analysis** — Aegis fetches the recipient contract's **EVM bytecode**
-   (`eth_getCode`) and scans its opcodes for danger patterns before paying.
-3. **Reputation (x402)** — endpoint reputation for USDC-settling payment endpoints.
+Aegis runs three quick checks on the recipient:
 
-## The three risk lanes
+| Check | Status | What it looks at |
+|-------|--------|------------------|
+| **Bytecode** | ✅ real | reads the recipient's on-chain code and flags traps like `SELFDESTRUCT` |
+| **Reputation** | 🔶 mock | allow / deny address lists |
+| **Behavior** | 🔶 mock | large amount to a first-time recipient |
 
-| Lane | Status | What it does |
-|------|--------|--------------|
-| **Bytecode** | ✅ real | `eth_getCode` → walk opcodes → flag `SELFDESTRUCT`, `DELEGATECALL`, `CALLCODE` |
-| **Reputation** | 🔶 mock | allow/deny address lists (roadmap: live reputation oracle) |
-| **Behavior** | 🔶 mock | amount threshold + first-time recipient → `ASK_HUMAN` |
+If a check gets alarmed or isn't sure, Aegis asks an LLM to read the raw
+bytecode and give a second opinion. It runs through the Claude CLI locally
+(`claude -p`) — no API key needed. If that ever fails, Aegis just trusts the
+first check, so a demo never breaks.
 
-Plus an **LLM reasoning** second pass: when a lane is alarmed or unsure, Aegis
-shells out to the Claude Code CLI in headless mode (`claude -p`, no API key) to
-reason over the raw bytecode and either confirm a real trap or clear a false
-alarm. If the CLI is missing or errors, the engine falls back to the
-deterministic verdict — the demo never breaks.
-
-### Decision logic
 ```
-reputation denylist                   -> BLOCK
-bytecode HIGH  -> LLM reasons over it -> BLOCK (confirmed)  /  ASK_HUMAN (disputed)
-large amount AND unknown recipient    -> ASK_HUMAN
-otherwise                             -> PAY
+denylisted            -> BLOCK
+dangerous bytecode    -> LLM checks it -> BLOCK or ASK_HUMAN
+big unknown payment   -> ASK_HUMAN
+all clear             -> PAY
 ```
 
-## Setup
+## Try it
 
 ```bash
 npm install
-cp .env.example .env      # then fill in PRIVATE_KEY, RPC_URL, addresses
-npm run balance           # sanity: confirm wallet + USDC address
+cp .env.example .env      # fill in PRIVATE_KEY, RPC_URL, GOOD_RECIPIENT
+npm run balance           # check the wallet + USDC are set up
 ```
 
-Uses a **throwaway** Sepolia test wallet. `.env` is gitignored — never commit keys.
+Use a throwaway Sepolia test wallet. `.env` is gitignored — keys never get committed.
 
-## Demo (Alice vs Bob)
+## The demo
 
 ```bash
-npm run deploy-bad        # deploy Recipient B (a SELFDESTRUCT contract), paste addr into .env
-
-npm run good              # Recipient A (normal EOA) -> PAY  -> real USDC transfer ✅
-npm run bad               # Recipient B (malicious)  -> BLOCK -> money saved 🛡️
+npm run deploy-bad        # deploy a malicious SELFDESTRUCT contract, paste its address into .env
+npm run good              # pay a normal wallet   -> PAY   -> real USDC goes out ✅
+npm run bad               # pay the bad contract  -> BLOCK -> money saved 🛡️
 ```
 
-Live run on Sepolia — the `PAY` case actually settled on-chain:
-[real 10 USDC transfer](https://sepolia.etherscan.io/tx/0x962f16fa26f5dc8dea26d86c67ca859dfc86df58b055536cde20458bdde9275a).
-The `BLOCK` case never leaves the machine — no tx is broadcast.
+The `PAY` case really settles on Sepolia —
+[here's the 10 USDC transfer](https://sepolia.etherscan.io/tx/0x962f16fa26f5dc8dea26d86c67ca859dfc86df58b055536cde20458bdde9275a).
+The `BLOCK` case never sends anything.
 
-## Stack
-Node.js (ESM) · [viem](https://viem.sh) · Ethereum Sepolia testnet
+## Built with
+
+Node.js · [viem](https://viem.sh) · Ethereum Sepolia
