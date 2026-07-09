@@ -13,7 +13,7 @@ const {
 } = process.env;
 
 if (!RPC_URL) {
-  throw new Error('RPC_URL missing in .env — copy .env.example to .env and fill it in.');
+  throw new Error('RPC_URL missing in .env - copy .env.example to .env and fill it in.');
 }
 
 // read-only client, always available
@@ -42,7 +42,7 @@ export const walletClient = _walletClient;
 // call this before sending anything
 export function requireWallet() {
   if (!_walletClient || !_account) {
-    throw new Error('PRIVATE_KEY missing in .env — needed to send transactions.');
+    throw new Error('PRIVATE_KEY missing in .env - needed to send transactions.');
   }
   return { walletClient: _walletClient, account: _account };
 }
@@ -55,7 +55,7 @@ export const addresses = {
 
 export function assertAddress(label, value) {
   if (!value || !isAddress(value)) {
-    throw new Error(`${label} is not a valid address: ${value ?? '(empty)'} — check your .env`);
+    throw new Error(`${label} is not a valid address: ${value ?? '(empty)'} - check your .env`);
   }
   return value;
 }

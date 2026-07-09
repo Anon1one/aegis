@@ -16,7 +16,7 @@ const TIMEOUT_MS = 60_000;
 function buildPrompt({ recipient, bytecode, hits, mode }) {
   const tripped =
     Object.entries(hits)
-      .map(([name, h]) => `${name}×${h.count} — ${h.note}`)
+      .map(([name, h]) => `${name} x${h.count} - ${h.note}`)
       .join('; ') || 'none';
 
   const task =
@@ -32,7 +32,7 @@ Deterministic heuristics tripped: ${tripped}
 
 ${task}
 
-Reply with ONLY a JSON object — no markdown fences, no prose outside it — exactly:
+Reply with ONLY a JSON object - no markdown fences, no prose outside it - exactly:
 {"malicious": true|false, "confidence": "low"|"medium"|"high", "reason": "one or two plain-English sentences"}`;
 }
 

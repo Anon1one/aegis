@@ -25,7 +25,7 @@ export async function payUSDC(recipient, amount) {
   const decimals = await usdcDecimals(usdc);
   const value = parseUnits(String(amount), decimals);
 
-  console.log(`  → sending ${amount} USDC to ${recipient} ...`);
+  console.log(`  -> sending ${amount} USDC to ${recipient} ...`);
   const hash = await walletClient.writeContract({
     address: usdc,
     abi: erc20Abi,
@@ -34,11 +34,11 @@ export async function payUSDC(recipient, amount) {
     account,
   });
 
-  console.log(`  → tx submitted: ${hash}`);
-  console.log('  → waiting for confirmation ...');
+  console.log(`  -> tx submitted: ${hash}`);
+  console.log('  -> waiting for confirmation ...');
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   const url = `https://sepolia.etherscan.io/tx/${hash}`;
-  console.log(`  → ${receipt.status === 'success' ? 'CONFIRMED ✅' : 'REVERTED ❌'}  ${url}`);
+  console.log(`  -> ${receipt.status === 'success' ? 'CONFIRMED' : 'REVERTED'}  ${url}`);
 
   return { hash, status: receipt.status, url };
 }

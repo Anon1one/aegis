@@ -71,7 +71,7 @@ export async function checkBytecode(recipient) {
       score: 0,
       isContract: false,
       code: '0x',
-      reason: 'Recipient is a normal wallet (EOA) — no contract code to run.',
+      reason: 'Recipient is a normal wallet (EOA) - no contract code to run.',
       hits: {},
     };
   }
@@ -98,7 +98,7 @@ export async function checkBytecode(recipient) {
     reason = `Recipient is a contract (${byteLen} bytes) with no known danger opcodes.`;
   } else {
     const parts = Object.entries(hits).map(
-      ([name, h]) => `${name}×${h.count} (${h.note})`,
+      ([name, h]) => `${name} x${h.count} (${h.note})`,
     );
     reason = `Contract bytecode contains: ${parts.join('; ')}.`;
   }

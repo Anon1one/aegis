@@ -5,7 +5,7 @@ import { publicClient, account, addresses, assertAddress } from '../src/config.j
 
 async function main() {
   if (!account) {
-    throw new Error('No account — fill PRIVATE_KEY in .env first.');
+    throw new Error('No account - fill PRIVATE_KEY in .env first.');
   }
   const usdc = assertAddress('USDC_ADDRESS', addresses.usdc);
 
@@ -28,10 +28,10 @@ async function main() {
   console.log(`  balance:  ${formatUnits(raw, decimals)} ${symbol}`);
 
   const ok = symbol.toUpperCase().includes('USDC') && Number(formatUnits(raw, decimals)) > 0;
-  console.log(`\n${ok ? '✅ Looks right — USDC address confirmed and wallet funded.' : '⚠️  Check the USDC_ADDRESS / balance above.'}\n`);
+  console.log(`\n${ok ? 'Looks right - USDC address confirmed and wallet funded.' : 'Check the USDC_ADDRESS / balance above.'}\n`);
 }
 
 main().catch((err) => {
-  console.error('\n❌ error:', err.shortMessage || err.message);
+  console.error('\nerror:', err.shortMessage || err.message);
   process.exit(1);
 });

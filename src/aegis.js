@@ -32,42 +32,42 @@ export async function aegisCheck(recipient, amount) {
   if (reputation.listed === 'deny') {
     // known bad, no point spending an llm call
     decision = DECISION.BLOCK;
-    reasons.push(`🛑 Reputation: ${reputation.reason}`);
+    reasons.push(`Reputation: ${reputation.reason}`);
   } else if (bytecode.level === 'HIGH') {
     // alarmed -> let the llm decide if it's a real trap or a false alarm
-    reasons.push(`⚠️  Bytecode flagged HIGH: ${bytecode.reason}`);
-    reasons.push('🧠 Escalating to LLM to reason over the bytecode…');
+    reasons.push(`Bytecode flagged HIGH: ${bytecode.reason}`);
+    reasons.push('Escalating to LLM to reason over the bytecode...');
     llm = await reason({ recipient, bytecode: bytecode.code, hits: bytecode.hits, mode: 'confirm' });
 
     if (!llm.available) {
       // llm down -> trust the deterministic alarm rather than crash
       decision = DECISION.BLOCK;
-      reasons.push(`🛑 LLM unavailable (${llm.error}); falling back to deterministic BLOCK.`);
+      reasons.push(`LLM unavailable (${llm.error}); falling back to deterministic BLOCK.`);
     } else if (llm.malicious) {
       decision = DECISION.BLOCK;
-      reasons.push(`🛑 LLM confirms malicious (${llm.confidence}): ${llm.reason}`);
+      reasons.push(`LLM confirms malicious (${llm.confidence}): ${llm.reason}`);
     } else {
       // llm thinks it's fine but the filter didn't - don't auto-block, ask a human
       decision = DECISION.ASK_HUMAN;
-      reasons.push(`🙋 LLM says likely benign (${llm.confidence}): ${llm.reason}`);
-      reasons.push('   (deterministic filter disagreed — surfacing both views to a human.)');
+      reasons.push(`LLM says likely benign (${llm.confidence}): ${llm.reason}`);
+      reasons.push('   (deterministic filter disagreed - surfacing both views to a human.)');
     }
   } else if (behavior.escalate) {
     // unsure -> have the llm explain the recipient so the human decides informed
-    reasons.push(`🙋 Behavior: ${behavior.reason}`);
-    reasons.push('🧠 Asking LLM to analyze the recipient for the human…');
+    reasons.push(`Behavior: ${behavior.reason}`);
+    reasons.push('Asking LLM to analyze the recipient for the human...');
     llm = await reason({ recipient, bytecode: bytecode.code, hits: bytecode.hits, mode: 'analyze' });
     decision = DECISION.ASK_HUMAN;
     if (llm.available) {
-      reasons.push(`🧠 LLM summary (${llm.confidence}): ${llm.reason}`);
+      reasons.push(`LLM summary (${llm.confidence}): ${llm.reason}`);
     } else {
-      reasons.push(`   (LLM unavailable: ${llm.error} — escalating on deterministic grounds.)`);
+      reasons.push(`   (LLM unavailable: ${llm.error} - escalating on deterministic grounds.)`);
     }
   } else {
     // nothing tripped -> just pay
     decision = DECISION.PAY;
-    reasons.push(`✅ Bytecode: ${bytecode.reason}`);
-    if (reputation.listed === 'allow') reasons.push(`✅ Reputation: ${reputation.reason}`);
+    reasons.push(`Bytecode: ${bytecode.reason}`);
+    if (reputation.listed === 'allow') reasons.push(`Reputation: ${reputation.reason}`);
   }
 
   return { decision, reasons, lanes, llm, recipient, amount };
@@ -83,11 +83,11 @@ function banner(decision) {
 
 export function printVerdict(result) {
   const { decision, reasons, recipient, amount } = result;
-  console.log('\n──────────────────────────────────────────────');
+  console.log('\n----------------------------------------------');
   console.log(`  AEGIS verdict for ${recipient}`);
   console.log(`  amount: ${amount} USDC`);
-  console.log('──────────────────────────────────────────────');
+  console.log('----------------------------------------------');
   console.log(`  ${banner(decision)}\n`);
   for (const r of reasons) console.log(`  ${r}`);
-  console.log('──────────────────────────────────────────────\n');
+  console.log('----------------------------------------------\n');
 }

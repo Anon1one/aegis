@@ -34,13 +34,13 @@ async function main() {
 
   // double-check the deployed code is what we expect
   const code = await publicClient.getCode({ address: addr });
-  console.log(`\n✅ Deployed at: ${addr}`);
-  console.log(`   runtime code: ${code}  ${code === '0x6000ff' ? '(contains SELFDESTRUCT ✔)' : ''}`);
+  console.log(`\nDeployed at: ${addr}`);
+  console.log(`   runtime code: ${code}  ${code === '0x6000ff' ? '(contains SELFDESTRUCT)' : ''}`);
   console.log(`   etherscan: https://sepolia.etherscan.io/address/${addr}`);
-  console.log(`\n👉 Put this in your .env:\n   BAD_RECIPIENT="${addr}"\n`);
+  console.log(`\nPut this in your .env:\n   BAD_RECIPIENT="${addr}"\n`);
 }
 
 main().catch((err) => {
-  console.error('\n❌ error:', err.shortMessage || err.message);
+  console.error('\nerror:', err.shortMessage || err.message);
   process.exit(1);
 });

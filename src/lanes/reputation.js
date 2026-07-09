@@ -33,6 +33,6 @@ export function checkReputation(recipient) {
     lane: 'reputation',
     level: 'LOW',
     listed: null,
-    reason: 'No reputation record (mock lane — allow/deny lists are empty in V1).',
+    reason: 'No reputation record (mock lane - allow/deny lists are empty in V1).',
   };
 }

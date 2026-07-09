@@ -39,7 +39,7 @@ async function main() {
   const intent = isApprove
     ? `approve ${label} to spend ${amount} USDC`
     : `pay ${amount} USDC to ${label}`;
-  console.log(`\n🤖 Agent wants to ${intent}`);
+  console.log(`\nAgent wants to ${intent}`);
   console.log(`   ${recipient}`);
   console.log('   ...asking Aegis first.');
 
@@ -49,21 +49,21 @@ async function main() {
 
   if (result.decision === DECISION.PAY) {
     if (isApprove) {
-      console.log('🤖 Aegis cleared it — sending the approval.\n');
+      console.log('Aegis cleared it, sending the approval.\n');
       await approveUSDC(recipient, amount);
     } else {
-      console.log('🤖 Aegis said PAY — firing the transaction.\n');
+      console.log('Aegis said PAY, firing the transaction.\n');
       await payUSDC(recipient, amount);
     }
   } else if (result.decision === DECISION.BLOCK) {
     const what = isApprove ? 'approval' : 'transaction';
-    console.log(`🛡️  Aegis said BLOCK — ${what} NOT sent. Money saved.\n`);
+    console.log(`Aegis said BLOCK. ${what} NOT sent, money saved.\n`);
   } else {
-    console.log('🙋 Aegis said ASK_HUMAN — pausing for human approval (not auto-sent).\n');
+    console.log('Aegis said ASK_HUMAN, pausing for human approval (not auto-sent).\n');
   }
 }
 
 main().catch((err) => {
-  console.error('\n❌ error:', err.shortMessage || err.message);
+  console.error('\nerror:', err.shortMessage || err.message);
   process.exit(1);
 });

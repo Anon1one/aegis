@@ -19,7 +19,7 @@ export function checkBehavior(recipient, amount) {
       lane: 'behavior',
       level: 'MEDIUM',
       escalate: true,
-      reason: `Large payment (${amount} USDC > ${AMOUNT_THRESHOLD}) to a first-time recipient — worth a human glance.`,
+      reason: `Large payment (${amount} USDC > ${AMOUNT_THRESHOLD}) to a first-time recipient - worth a human glance.`,
     };
   }
   return {
