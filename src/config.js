@@ -10,6 +10,7 @@ const {
   USDC_ADDRESS,
   GOOD_RECIPIENT,
   BAD_RECIPIENT,
+  AEGIS_GUARD,
 } = process.env;
 
 if (!RPC_URL) {
@@ -51,6 +52,7 @@ export const addresses = {
   usdc: USDC_ADDRESS,
   good: GOOD_RECIPIENT,
   bad: BAD_RECIPIENT,
+  guard: AEGIS_GUARD, // the deployed AegisGuard, set after deploy-guard
 };
 
 export function assertAddress(label, value) {

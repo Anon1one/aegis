@@ -5,16 +5,22 @@
 //   node src/agent.js bad                     pay recipient B (BAD_RECIPIENT)
 //   node src/agent.js <0xaddr> [amt]          pay any address
 //   node src/agent.js approve <good|bad|0x>   approve a spender to move our USDC
+//   node src/agent.js guard <good|bad|0x>     pay THROUGH the on-chain AegisGuard
 //
 // the approve path matters: agents usually lose funds not by sending to a trap
 // but by approving a malicious spender that drains them later. so we check the
 // spender's code the same way we'd check a recipient.
+//
+// the guard path routes the payment through the deployed AegisGuard contract,
+// so the same policy is enforced on-chain and can't be skipped by the agent.
 import { aegisCheck, printVerdict, DECISION } from './aegis.js';
 import { payUSDC } from './pay.js';
 import { approveUSDC } from './approve.js';
+import { guardedPay, assessOnChain } from './guard.js';
 import { addresses, assertAddress } from './config.js';
 
 const DEFAULT_AMOUNT = 10;
+const MODES = new Set(['approve', 'guard']);
 
 function resolveTarget(arg) {
   if (arg === 'good') return { recipient: assertAddress('GOOD_RECIPIENT', addresses.good), label: 'Recipient A (good EOA)' };
@@ -24,11 +30,13 @@ function resolveTarget(arg) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const isApprove = args[0] === 'approve';
-  const [targetArg, amountArg] = isApprove ? args.slice(1) : args;
+  const mode = MODES.has(args[0]) ? args[0] : 'pay';
+  const isApprove = mode === 'approve';
+  const isGuard = mode === 'guard';
+  const [targetArg, amountArg] = mode === 'pay' ? args : args.slice(1);
 
   if (!targetArg) {
-    console.log('usage: node src/agent.js [approve] <good|bad|0xADDRESS> [amount]');
+    console.log('usage: node src/agent.js [approve|guard] <good|bad|0xADDRESS> [amount]');
     process.exit(1);
   }
 
@@ -42,7 +50,9 @@ async function main() {
 
   const intent = isApprove
     ? `approve ${label} to spend ${amount} USDC`
-    : `pay ${amount} USDC to ${label}`;
+    : isGuard
+      ? `pay ${amount} USDC to ${label} through AegisGuard`
+      : `pay ${amount} USDC to ${label}`;
   console.log(`\nAgent wants to ${intent}`);
   console.log(`   ${recipient}`);
   console.log('   ...asking Aegis first.');
@@ -51,10 +61,20 @@ async function main() {
   const result = await aegisCheck(recipient, amount, { isApprove });
   printVerdict(result);
 
+  // in guard mode also show the deployed contract's own verdict, so you can see
+  // the off-chain engine and the on-chain firewall agree.
+  if (isGuard) {
+    const onchain = await assessOnChain(recipient, amount);
+    console.log(`  On-chain AegisGuard.assess(): ${onchain.verdict} (${onchain.reason})\n`);
+  }
+
   if (result.decision === DECISION.PAY) {
     if (isApprove) {
       console.log('Aegis cleared it, sending the approval.\n');
       await approveUSDC(recipient, amount);
+    } else if (isGuard) {
+      console.log('Aegis said PAY, routing the payment through the guard.\n');
+      await guardedPay(recipient, amount);
     } else {
       console.log('Aegis said PAY, firing the transaction.\n');
       await payUSDC(recipient, amount);
