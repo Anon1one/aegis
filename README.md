@@ -24,10 +24,16 @@ is going*, and returns one decision before the transaction fires:
 | **Reputation** | 🔶 mock | allow/deny address lists (roadmap: live reputation oracle) |
 | **Behavior** | 🔶 mock | amount threshold + first-time recipient → `ASK_HUMAN` |
 
+Plus an **LLM reasoning** second pass: when a lane is alarmed or unsure, Aegis
+shells out to the Claude Code CLI in headless mode (`claude -p`, no API key) to
+reason over the raw bytecode and either confirm a real trap or clear a false
+alarm. If the CLI is missing or errors, the engine falls back to the
+deterministic verdict — the demo never breaks.
+
 ### Decision logic
 ```
-bytecode HIGH                         -> BLOCK
 reputation denylist                   -> BLOCK
+bytecode HIGH  -> LLM reasons over it -> BLOCK (confirmed)  /  ASK_HUMAN (disputed)
 large amount AND unknown recipient    -> ASK_HUMAN
 otherwise                             -> PAY
 ```
@@ -50,6 +56,10 @@ npm run deploy-bad        # deploy Recipient B (a SELFDESTRUCT contract), paste 
 npm run good              # Recipient A (normal EOA) -> PAY  -> real USDC transfer ✅
 npm run bad               # Recipient B (malicious)  -> BLOCK -> money saved 🛡️
 ```
+
+Live run on Sepolia — the `PAY` case actually settled on-chain:
+[real 10 USDC transfer](https://sepolia.etherscan.io/tx/0x962f16fa26f5dc8dea26d86c67ca859dfc86df58b055536cde20458bdde9275a).
+The `BLOCK` case never leaves the machine — no tx is broadcast.
 
 ## Stack
 Node.js (ESM) · [viem](https://viem.sh) · Ethereum Sepolia testnet
