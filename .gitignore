@@ -1,4 +1,4 @@
-# secrets — NEVER commit
+# secrets, never commit
 .env
 
 # deps
@@ -9,5 +9,5 @@ node_modules/
 *.log
 .DS_Store
 
-# internal build brief — not part of the shipped project
+# internal build brief, not part of the shipped project
 prompt.md
