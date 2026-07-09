@@ -6,16 +6,32 @@
   "scripts": {
     "balance": "node scripts/check-balance.js",
     "deploy-bad": "node scripts/deploy-bad-contract.js",
+    "deploy-guard": "node scripts/deploy-guard.js",
+    "guard-setup": "node scripts/guard-setup.js",
+    "verify-guard": "node scripts/verify-guard.js",
     "good": "node src/agent.js good",
     "bad": "node src/agent.js bad",
     "approve-good": "node src/agent.js approve good",
-    "approve-bad": "node src/agent.js approve bad"
+    "approve-bad": "node src/agent.js approve bad",
+    "guard-good": "node src/agent.js guard good",
+    "guard-bad": "node src/agent.js guard bad",
+    "test": "node --test test/*.test.mjs"
   },
-  "keywords": ["ethereum", "usdc", "ai-agent", "security", "evm", "bytecode"],
+  "keywords": [
+    "ethereum",
+    "usdc",
+    "ai-agent",
+    "security",
+    "evm",
+    "bytecode"
+  ],
   "author": "Akshat Odiya",
   "license": "ISC",
   "dependencies": {
     "dotenv": "^17.4.2",
     "viem": "^2.54.6"
+  },
+  "devDependencies": {
+    "solc": "0.8.28"
   }
 }

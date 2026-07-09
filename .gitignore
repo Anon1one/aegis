@@ -5,6 +5,9 @@
 node_modules/
 .npm-cache/
 
+# solc build output (compiled on demand)
+contracts/out/
+
 # misc
 *.log
 .DS_Store
