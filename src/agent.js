@@ -35,6 +35,10 @@ async function main() {
   // in approve mode the target is the spender we'd hand an allowance to
   const { recipient, label } = resolveTarget(targetArg);
   const amount = amountArg ? Number(amountArg) : DEFAULT_AMOUNT;
+  if (!Number.isFinite(amount) || amount <= 0) {
+    console.log(`bad amount: ${amountArg} (must be a positive number)`);
+    process.exit(1);
+  }
 
   const intent = isApprove
     ? `approve ${label} to spend ${amount} USDC`
@@ -44,7 +48,7 @@ async function main() {
   console.log('   ...asking Aegis first.');
 
   // same risk check either way - who are we trusting with our money?
-  const result = await aegisCheck(recipient, amount);
+  const result = await aegisCheck(recipient, amount, { isApprove });
   printVerdict(result);
 
   if (result.decision === DECISION.PAY) {

@@ -24,10 +24,15 @@ function buildPrompt({ recipient, bytecode, hits, mode }) {
       ? 'The deterministic filter flagged this as HIGH risk (a BLOCK candidate). Decide whether it is GENUINELY malicious for someone SENDING funds to this address, or a benign false alarm.'
       : 'The deterministic filter is UNCERTAIN about this payment. Analyze the bytecode and summarize what this contract can do, so a human can decide, informed.';
 
+  const codeLine =
+    bytecode && bytecode !== '0x'
+      ? bytecode
+      : '(none - recipient is an EOA with no contract code)';
+
   return `You are a smart-contract security analyzer inside a payment firewall for AI agents.
 
 Recipient: ${recipient}
-Recipient EVM runtime bytecode: ${bytecode}
+Recipient EVM runtime bytecode: ${codeLine}
 Deterministic heuristics tripped: ${tripped}
 
 ${task}

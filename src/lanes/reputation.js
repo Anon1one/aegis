@@ -1,13 +1,12 @@
-// reputation lane - mock for now.
-// real version would hit endpoint-reputation feeds (x402 history, shared
-// denylists). for the demo it's just two maps. roadmap: live reputation oracle.
+// reputation lane. mock for now.
+// TODO: wire this to a real feed - x402 payment history + shared denylists.
+// for the demo it's just two lookup maps, both empty in v1.
 
 const DENYLIST = new Map([
-  // address(lowercase) -> reason
+  // 0xabc...(lowercase) -> reason
 ]);
 
 const ALLOWLIST = new Map([
-  // address(lowercase) -> reason
 ]);
 
 export function checkReputation(recipient) {

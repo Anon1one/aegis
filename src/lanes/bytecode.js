@@ -2,11 +2,14 @@
 // pull the recipient's code with eth_getCode and scan the opcodes for
 // stuff that's usually bad news. this is the ethereum-native check: we're
 // reading the actual EVM instructions the recipient would run.
+//
+// note: it's a linear walk, so "present" != "reachable". we over-flag on
+// purpose and let the llm second pass sort out the false alarms.
 import { publicClient } from '../config.js';
 
-// opcodes we flag + how much risk each adds
+// danger opcodes -> how much risk each one adds to the score
 const DANGER = {
-  0xff: { name: 'SELFDESTRUCT', score: 60, note: 'contract can self-destruct - classic honeypot / rug pattern' },
+  0xff: { name: 'SELFDESTRUCT', score: 60, note: 'selfdestruct present - funds sent here can get stranded (honeypot / dead-end pattern)' },
   0xf4: { name: 'DELEGATECALL', score: 40, note: 'delegatecall - upgradeable/proxy, logic can be swapped out under you' },
   0xf2: { name: 'CALLCODE',     score: 40, note: 'callcode - deprecated delegatecall variant, drainer-adjacent' },
   0xf5: { name: 'CREATE2',      score: 35, note: 'create2 - can redeploy different code at the same address (metamorphic rug)' },
@@ -21,6 +24,20 @@ function isPush(op) {
 }
 function pushLen(op) {
   return op - 0x60 + 1;
+}
+
+// solc appends a CBOR metadata blob after the runtime code. the last 2 bytes
+// are its length, and the blob starts with 0xa2 (a cbor map). trim it so we
+// don't walk the ipfs hash bytes as if they were opcodes and false-alarm.
+function stripMetadata(hex) {
+  const bytes = Buffer.from(hex.slice(2), 'hex');
+  if (bytes.length < 4) return hex;
+  const len = bytes[bytes.length - 2] * 256 + bytes[bytes.length - 1];
+  const start = bytes.length - 2 - len;
+  if (start > 0 && bytes[start] === 0xa2) {
+    return '0x' + bytes.subarray(0, start).toString('hex');
+  }
+  return hex;
 }
 
 // walk the code instruction by instruction, counting danger opcodes
@@ -42,16 +59,16 @@ function scanOpcodes(hex) {
   return hits;
 }
 
-// eip-1167 minimal proxy: a fixed runtime shape that just delegatecalls to a
-// hardcoded implementation address baked into the middle. the real logic lives
-// in another contract we can't see from here, so it's opaque by design.
+// eip-1167 minimal proxy: a fixed 45-byte runtime that just delegatecalls to a
+// hardcoded implementation baked into the middle. exact shape, nothing after -
+// the real logic lives in another contract we can't see from here.
 //   363d3d373d3d3d363d73 <20-byte impl> 5af43d82803e903d91602b57fd5bf3
 const PROXY_HEAD = '363d3d373d3d3d363d73';
 const PROXY_TAIL = '5af43d82803e903d91602b57fd5bf3';
 
 function isMinimalProxy(hex) {
   const h = hex.slice(2).toLowerCase();
-  return h.startsWith(PROXY_HEAD) && h.includes(PROXY_TAIL);
+  return h.length === 90 && h.startsWith(PROXY_HEAD) && h.endsWith(PROXY_TAIL);
 }
 
 function levelFromScore(score) {
@@ -62,6 +79,23 @@ function levelFromScore(score) {
 
 export async function checkBytecode(recipient) {
   const code = await publicClient.getCode({ address: recipient });
+  const lower = (code || '0x').toLowerCase();
+
+  // eip-7702: a delegated EOA returns 0xef0100 || <20-byte address>. it's not a
+  // real contract, execution is just forwarded to that address, so don't scan
+  // the address bytes as opcodes. flag it so a human can look at the delegate.
+  if (lower.startsWith('0xef0100') && lower.length === 48) {
+    const target = '0x' + lower.slice(8);
+    return {
+      lane: 'bytecode',
+      level: 'MEDIUM',
+      score: 40,
+      isContract: false,
+      code,
+      reason: `EOA with an EIP-7702 delegation to ${target}. Execution is forwarded to that contract.`,
+      hits: {},
+    };
+  }
 
   // no code = a normal wallet (EOA). nothing to run, low risk.
   if (!code || code === '0x') {
@@ -76,7 +110,7 @@ export async function checkBytecode(recipient) {
     };
   }
 
-  const hits = scanOpcodes(code);
+  const hits = scanOpcodes(stripMetadata(code));
 
   // if it's a recognized minimal proxy, report that precisely instead of a
   // bare delegatecall - the real signal is "logic is hidden elsewhere".

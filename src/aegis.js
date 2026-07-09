@@ -18,7 +18,11 @@ export const DECISION = {
   ASK_HUMAN: 'ASK_HUMAN',
 };
 
-export async function aegisCheck(recipient, amount) {
+export async function aegisCheck(recipient, amount, opts = {}) {
+  // isApprove: we're granting an allowance, not sending funds. the risk is a
+  // bit different (see the EOA case below), so the engine needs to know.
+  const { isApprove = false } = opts;
+
   // lane 1 is a real on-chain call, 2 and 3 are sync mocks
   const bytecode = await checkBytecode(recipient);
   const reputation = checkReputation(recipient);
@@ -52,6 +56,19 @@ export async function aegisCheck(recipient, amount) {
       reasons.push(`LLM says likely benign (${llm.confidence}): ${llm.reason}`);
       reasons.push('   (deterministic filter disagreed - surfacing both views to a human.)');
     }
+  } else if (bytecode.level === 'MEDIUM') {
+    // not an outright trap, but not clearly safe either (proxy, delegatecall,
+    // create2, 7702 delegation). don't wave it through - have the llm explain
+    // the contract and let a human make the call.
+    reasons.push(`Bytecode flagged MEDIUM: ${bytecode.reason}`);
+    reasons.push('Asking LLM to analyze the contract for the human...');
+    llm = await reason({ recipient, bytecode: bytecode.code, hits: bytecode.hits, mode: 'analyze' });
+    decision = DECISION.ASK_HUMAN;
+    if (llm.available) {
+      reasons.push(`LLM summary (${llm.confidence}): ${llm.reason}`);
+    } else {
+      reasons.push(`   (LLM unavailable: ${llm.error} - escalating on deterministic grounds.)`);
+    }
   } else if (behavior.escalate) {
     // unsure -> have the llm explain the recipient so the human decides informed
     reasons.push(`Behavior: ${behavior.reason}`);
@@ -63,10 +80,23 @@ export async function aegisCheck(recipient, amount) {
     } else {
       reasons.push(`   (LLM unavailable: ${llm.error} - escalating on deterministic grounds.)`);
     }
+  } else if (isApprove && !bytecode.isContract) {
+    // approving a plain wallet. a legit spender is almost always a contract
+    // (a router, an escrow); an open-ended allowance to an EOA is a classic
+    // phishing pattern, so pause for a human instead of auto-approving.
+    decision = DECISION.ASK_HUMAN;
+    reasons.push('Approving a plain wallet (EOA). Real spenders are normally contracts, so an allowance to an EOA is a common phishing pattern.');
+    reasons.push('   Surfacing to a human before the allowance is granted.');
   } else {
-    // nothing tripped -> just pay
+    // nothing tripped -> just go through
     decision = DECISION.PAY;
-    reasons.push(`Bytecode: ${bytecode.reason}`);
+    if (bytecode.isContract && bytecode.score > 0) {
+      // minor flags that stayed under the risk threshold - don't dump the whole
+      // danger list above a green banner, just say it's below threshold.
+      reasons.push(`Bytecode: minor flags below the risk threshold (${Object.keys(bytecode.hits).join(', ')}).`);
+    } else {
+      reasons.push(`Bytecode: ${bytecode.reason}`);
+    }
     if (reputation.listed === 'allow') reasons.push(`Reputation: ${reputation.reason}`);
   }
 
