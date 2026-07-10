@@ -3,7 +3,7 @@
 // USDC from the treasury through the guard, and setupGuard() does the one-time
 // wiring: treasury approves the guard for USDC and the owner whitelists the
 // caller as an agent.
-import { parseUnits, erc20Abi } from 'viem';
+import { parseUnits, erc20Abi, keccak256 } from 'viem';
 import { publicClient, requireWallet, addresses, assertAddress } from './config.js';
 import { compileGuard } from './compile.js';
 
@@ -84,4 +84,66 @@ export async function guardedPay(to, amount) {
   console.log(`  -> ${receipt.status === 'success' ? 'CONFIRMED' : 'REVERTED'}  ${url}`);
 
   return { hash, status: receipt.status, url };
+}
+
+// the bridge between the two layers. once the off-chain analyzer (opcode scan +
+// llm) is sure a recipient is malicious, we write that conclusion into the
+// guard's own on-chain state, so from now on the contract blocks it by itself -
+// even for an agent that never runs the off-chain check. note this only ever
+// *tightens* policy (it writes blocklists, never the allowlist), so the worst a
+// bad call can do is a false block, which the owner can undo with one tx.
+//
+// a real contract is blocked by codehash: that kills every address running the
+// exact same bytecode, not just this one deployment. a plain wallet (or an
+// EIP-7702 delegated EOA, which also carries code) has no code family we'd want
+// to block wholesale, so it's denylisted by address instead. both setters are
+// onlyOwner on-chain, so this needs the guard owner's key - in the demo the
+// deployer is owner + treasury + agent.
+export async function recordVerdictOnChain(to) {
+  const { walletClient, account } = requireWallet();
+  const guard = guardAddress();
+
+  const code = await publicClient.getCode({ address: to });
+  // eip-7702 delegated EOA: getCode returns 0xef0100 || <delegate>. that
+  // "codehash" is shared by every account pointing at the same delegate, so
+  // blocking it would take out unrelated wallets. treat it as an EOA.
+  const lower = (code || '0x').toLowerCase();
+  const isRealContract = lower !== '0x' && !lower.startsWith('0xef0100');
+
+  try {
+    if (isRealContract) {
+      const codehash = keccak256(code);
+      // idempotency: read the exact slot we're about to write, not assess() - the
+      // address could already be blocked for some other reason while this
+      // codehash isn't, and we'd wrongly skip recording the code family.
+      const already = await publicClient.readContract({
+        address: guard, abi: guardAbi(), functionName: 'blockedCodehash', args: [codehash],
+      });
+      if (already) {
+        return { changed: false, message: `already blocked on-chain (bytecode ${codehash.slice(0, 10)}...) - recorded on an earlier run.` };
+      }
+      console.log(`  -> setBlockedCodehash(${codehash.slice(0, 10)}...) ...`);
+      const hash = await walletClient.writeContract({
+        address: guard, abi: guardAbi(), functionName: 'setBlockedCodehash', args: [codehash, true], account,
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      return { changed: true, message: `blocked its bytecode ${codehash.slice(0, 10)}... on-chain (kills every clone of this exact code).`, hash };
+    }
+
+    const already = await publicClient.readContract({
+      address: guard, abi: guardAbi(), functionName: 'denylisted', args: [to],
+    });
+    if (already) {
+      return { changed: false, message: `already denylisted on-chain - recorded on an earlier run.` };
+    }
+    console.log(`  -> setDenylisted(${to}) ...`);
+    const hash = await walletClient.writeContract({
+      address: guard, abi: guardAbi(), functionName: 'setDenylisted', args: [to, true], account,
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+    return { changed: true, message: `denylisted ${to} on-chain.`, hash };
+  } catch (err) {
+    // e.g. run by someone who isn't the guard owner - degrade instead of crash.
+    return { changed: false, message: `could not record on-chain: ${err.shortMessage || err.message}` };
+  }
 }

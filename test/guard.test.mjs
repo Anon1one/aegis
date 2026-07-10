@@ -161,6 +161,21 @@ test('a blocked codehash overrides the allowlist', async () => {
   assert.equal(reason, 'recipient code is blocklisted');
 });
 
+test('recording a malicious contract flips it from REVIEW to BLOCK', async () => {
+  // this is what recordVerdictOnChain() does off-chain once the analyzer + llm
+  // confirm a honeypot: block the recipient's whole bytecode family by codehash.
+  // an unvetted contract starts at REVIEW...
+  assert.equal((await assess(honeypot, 10)).verdict, V.REVIEW);
+
+  const code = await pub.getCode({ address: honeypot });
+  await send(guard, GUARD.abi, 'setBlockedCodehash', [keccak256(code), true]);
+
+  // ...and after the verdict is written on-chain, the guard blocks it itself.
+  const after = await assess(honeypot, 10);
+  assert.equal(after.verdict, V.BLOCK);
+  assert.equal(after.reason, 'recipient code is blocklisted');
+});
+
 test('behavior lane: spend past the daily limit is REVIEW', async () => {
   // limit is 100; spend 60 first, then 60 more would cross it
   await send(guard, GUARD.abi, 'guardedPay', [bob, usd(60)]);

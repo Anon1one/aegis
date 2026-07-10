@@ -16,7 +16,7 @@
 import { aegisCheck, printVerdict, DECISION } from './aegis.js';
 import { payUSDC } from './pay.js';
 import { approveUSDC } from './approve.js';
-import { guardedPay, assessOnChain } from './guard.js';
+import { guardedPay, assessOnChain, recordVerdictOnChain } from './guard.js';
 import { addresses, assertAddress } from './config.js';
 
 const DEFAULT_AMOUNT = 10;
@@ -61,20 +61,17 @@ async function main() {
   const result = await aegisCheck(recipient, amount, { isApprove });
   printVerdict(result);
 
-  // in guard mode also show the deployed contract's own verdict, so you can see
-  // the off-chain engine and the on-chain firewall agree.
+  // guard mode has its own flow: it routes the decision through the deployed
+  // AegisGuard, and teaches the guard when the recipient is bad (see runGuard).
   if (isGuard) {
-    const onchain = await assessOnChain(recipient, amount);
-    console.log(`  On-chain AegisGuard.assess(): ${onchain.verdict} (${onchain.reason})\n`);
+    await runGuard(recipient, amount, result);
+    return;
   }
 
   if (result.decision === DECISION.PAY) {
     if (isApprove) {
       console.log('Aegis cleared it, sending the approval.\n');
       await approveUSDC(recipient, amount);
-    } else if (isGuard) {
-      console.log('Aegis said PAY, routing the payment through the guard.\n');
-      await guardedPay(recipient, amount);
     } else {
       console.log('Aegis said PAY, firing the transaction.\n');
       await payUSDC(recipient, amount);
@@ -85,6 +82,38 @@ async function main() {
   } else {
     console.log('Aegis said ASK_HUMAN, pausing for human approval (not auto-sent).\n');
   }
+}
+
+// guard mode. show the contract's own verdict too, then act on the off-chain
+// decision through the on-chain guard:
+//   PAY       -> settle the payment via guardedPay (a real transfer).
+//   BLOCK     -> record the recipient into the guard's on-chain lists, so the
+//                contract will block it by itself from now on, and watch the
+//                on-chain verdict flip. no payment is sent.
+//   ASK_HUMAN -> stop and leave it for a person.
+async function runGuard(recipient, amount, result) {
+  const before = await assessOnChain(recipient, amount);
+  console.log(`  On-chain AegisGuard.assess(): ${before.verdict} (${before.reason})`);
+
+  if (result.decision === DECISION.PAY) {
+    console.log('\nAegis said PAY, routing the payment through the guard.\n');
+    await guardedPay(recipient, amount);
+    return;
+  }
+
+  if (result.decision === DECISION.BLOCK) {
+    console.log('\nAegis said BLOCK. teaching the guard so it enforces this on-chain too...');
+    const rec = await recordVerdictOnChain(recipient);
+    console.log(`  ${rec.message}`);
+    if (rec.changed) {
+      const after = await assessOnChain(recipient, amount);
+      console.log(`  On-chain AegisGuard.assess() now: ${after.verdict} (${after.reason})`);
+    }
+    console.log('\ntransaction NOT sent, money saved - and the guard now blocks it on its own.\n');
+    return;
+  }
+
+  console.log('\nAegis said ASK_HUMAN, pausing for a human (not auto-sent).\n');
 }
 
 main().catch((err) => {
