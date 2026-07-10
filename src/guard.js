@@ -147,3 +147,49 @@ export async function recordVerdictOnChain(to) {
     return { changed: false, message: `could not record on-chain: ${err.shortMessage || err.message}` };
   }
 }
+
+// true when `to` is a contract the guard hasn't been told to trust yet - which is
+// exactly the on-chain condition behind a REVIEW of "unvetted contract recipient".
+// we recompute it from state (has code, not allowlisted) rather than string-match
+// the revert reason, so the two don't drift apart. an EIP-7702 EOA (0xef0100...)
+// carries code but isn't a contract we'd allowlist, so it's excluded.
+export async function needsVetting(to) {
+  const guard = guardAddress();
+  const code = await publicClient.getCode({ address: to });
+  const lower = (code || '0x').toLowerCase();
+  if (lower === '0x' || lower.startsWith('0xef0100')) return false;
+
+  const allowed = await publicClient.readContract({
+    address: guard, abi: guardAbi(), functionName: 'allowedContract', args: [to],
+  });
+  return !allowed;
+}
+
+// the allow direction of the bridge, and the mirror image of recordVerdictOnChain.
+// it marks a contract as vetted (setAllowedContract) so the guard will auto-pay
+// it from now on. this GRANTS trust, which is the dangerous direction - a wrong
+// allow lets money out, where a wrong block only refuses a payment. so unlike
+// blocking, this is never called silently: the caller (see agent.js runGuard)
+// gets an explicit owner confirmation first. here we just do the owner-only write.
+export async function allowlistOnChain(to) {
+  const { walletClient, account } = requireWallet();
+  const guard = guardAddress();
+
+  const already = await publicClient.readContract({
+    address: guard, abi: guardAbi(), functionName: 'allowedContract', args: [to],
+  });
+  if (already) {
+    return { changed: false, message: `already allowlisted on-chain.` };
+  }
+
+  try {
+    console.log(`  -> setAllowedContract(${to}) ...`);
+    const hash = await walletClient.writeContract({
+      address: guard, abi: guardAbi(), functionName: 'setAllowedContract', args: [to, true], account,
+    });
+    await publicClient.waitForTransactionReceipt({ hash });
+    return { changed: true, message: `allowlisted ${to} on-chain.`, hash };
+  } catch (err) {
+    return { changed: false, message: `could not allowlist on-chain: ${err.shortMessage || err.message}` };
+  }
+}

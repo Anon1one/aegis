@@ -176,6 +176,20 @@ test('recording a malicious contract flips it from REVIEW to BLOCK', async () =>
   assert.equal(after.reason, 'recipient code is blocklisted');
 });
 
+test('allowlisting a vetted contract flips it from REVIEW to PAY', async () => {
+  // the allow direction of the bridge (allowlistOnChain): once the owner vets a
+  // contract, the guard auto-pays it. use the mock token as a stand-in benign
+  // contract recipient - it has code, so it starts unvetted at REVIEW...
+  assert.equal((await assess(usdc, 10)).verdict, V.REVIEW);
+
+  await send(guard, GUARD.abi, 'setAllowedContract', [usdc, true]);
+
+  // ...and after it's allowlisted the guard is happy to pay it.
+  const after = await assess(usdc, 10);
+  assert.equal(after.verdict, V.PAY);
+  assert.equal(after.reason, 'clear');
+});
+
 test('behavior lane: spend past the daily limit is REVIEW', async () => {
   // limit is 100; spend 60 first, then 60 more would cross it
   await send(guard, GUARD.abi, 'guardedPay', [bob, usd(60)]);

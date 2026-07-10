@@ -16,7 +16,8 @@
 import { aegisCheck, printVerdict, DECISION } from './aegis.js';
 import { payUSDC } from './pay.js';
 import { approveUSDC } from './approve.js';
-import { guardedPay, assessOnChain, recordVerdictOnChain } from './guard.js';
+import { createInterface } from 'node:readline/promises';
+import { guardedPay, assessOnChain, recordVerdictOnChain, allowlistOnChain, needsVetting } from './guard.js';
 import { addresses, assertAddress } from './config.js';
 
 const DEFAULT_AMOUNT = 10;
@@ -96,8 +97,22 @@ async function runGuard(recipient, amount, result) {
   console.log(`  On-chain AegisGuard.assess(): ${before.verdict} (${before.reason})`);
 
   if (result.decision === DECISION.PAY) {
-    console.log('\nAegis said PAY, routing the payment through the guard.\n');
-    await guardedPay(recipient, amount);
+    // the guard is stricter than we are: it won't auto-pay a contract it hasn't
+    // been told to trust, so a first-time contract recipient reads as REVIEW here
+    // even though we judged it safe. offer to vet it - but allowlisting GRANTS
+    // trust (a wrong allow lets money out), so we never do it silently: the owner
+    // has to say yes once. after that the contract is on the allowlist for good.
+    if (before.verdict === 'REVIEW' && (await needsVetting(recipient))) {
+      const paid = await vetThenPay(recipient, amount);
+      if (!paid) return;
+    } else if (before.verdict === 'PAY') {
+      console.log('\nAegis said PAY, routing the payment through the guard.\n');
+      await guardedPay(recipient, amount);
+    } else {
+      // on-chain is stricter for some other reason (over the daily limit,
+      // denylisted, ...). don't fire a transaction we know would just revert.
+      console.log(`\nOn-chain guard says ${before.verdict} (${before.reason}), not sending.\n`);
+    }
     return;
   }
 
@@ -114,6 +129,50 @@ async function runGuard(recipient, amount, result) {
   }
 
   console.log('\nAegis said ASK_HUMAN, pausing for a human (not auto-sent).\n');
+}
+
+// a first-time contract recipient we judged safe: ask the owner to vet it, and
+// only if they agree do we allowlist it and pay. returns true if the payment went
+// out, false if we stopped (owner declined, or it still isn't PAY on-chain).
+async function vetThenPay(recipient, amount) {
+  console.log('\nThe guard has never seen this contract, so on-chain it is REVIEW.');
+  console.log('Aegis judged it safe off-chain, but allowlisting grants trust - only the owner can.');
+
+  const ok = await confirmOwner(`Allowlist ${recipient} on-chain and pay it ${amount} USDC?`);
+  if (!ok) {
+    console.log('\nleaving it at REVIEW, no payment sent.\n');
+    return false;
+  }
+
+  const vetted = await allowlistOnChain(recipient);
+  console.log(`  ${vetted.message}`);
+
+  const after = await assessOnChain(recipient, amount);
+  console.log(`  On-chain AegisGuard.assess() now: ${after.verdict} (${after.reason})`);
+  if (after.verdict !== 'PAY') {
+    console.log('\nstill not PAY on-chain, not sending.\n');
+    return false;
+  }
+
+  console.log('\nallowlisted, routing the payment through the guard.\n');
+  await guardedPay(recipient, amount);
+  return true;
+}
+
+// ask the person at the keyboard a yes/no question. if nobody's there (no TTY -
+// piped, CI, a script), default to NO: we never grant trust without a real human.
+async function confirmOwner(question) {
+  if (!process.stdin.isTTY) {
+    console.log(`  (${question} - no interactive owner present, defaulting to no.)`);
+    return false;
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = (await rl.question(`${question} (y/N) `)).trim().toLowerCase();
+    return answer === 'y' || answer === 'yes';
+  } finally {
+    rl.close();
+  }
 }
 
 main().catch((err) => {
