@@ -71,10 +71,11 @@ A few properties worth calling out:
 ## How the two layers connect
 
 The off-chain analyzer and the on-chain guard are not two separate opinions that
-happen to agree. They are wired together, in one direction: when the analyzer
-(the opcode scan plus the LLM) is confident a recipient is malicious, it writes
-that verdict into the guard's own state so the contract enforces it from then on -
-even for an agent that never runs the off-chain check.
+happen to agree. They are wired together - but the two directions are not
+symmetric. When the analyzer (the opcode scan plus the LLM) is confident a
+recipient is malicious, it writes that verdict into the guard's own state so the
+contract enforces it from then on - even for an agent that never runs the
+off-chain check.
 
 That is what `recordVerdictOnChain` in `src/guard.js` does. A contract recipient
 gets blocked by *codehash* (`setBlockedCodehash`), which kills every address
@@ -93,12 +94,24 @@ You can watch this happen: the first `npm run guard-bad` finds the honeypot at
 verdict flips to `BLOCK` in the same run. A second run just reports it is already
 blocked and sends no transaction.
 
-One deliberate property: this bridge can only ever *tighten* the policy - it
-writes blocklists, never the allowlist. So the worst a false positive can do is
-refuse a payment, which the owner can undo with a single transaction. It fails
-closed, not open. In a real deployment you would gate that auto-write behind a
-human confirmation or a timelock; here it runs directly so the demo is one
-command.
+The *allow* direction is deliberately not automatic in the same way. The guard
+only trusts a contract it has been told about, so a first-time contract recipient
+reads as `REVIEW` even when the analyzer judged it safe. In that case the CLI
+(`vetThenPay`) offers to allowlist it, but never silently: it asks the owner to
+confirm, and with no interactive owner present it defaults to no. Only on an
+explicit yes does it call `setAllowedContract` and then pay. The reasoning is the
+asymmetry of mistakes - a wrong *block* just refuses a payment (the owner undoes
+it in one tx, so blocking auto-fires and fails closed), while a wrong *allow*
+would let money out, so it needs a human.
+
+Two honest notes. The y/N is human-in-the-loop UX, not the security boundary -
+the owner key sits in the same process as the agent, so the real boundary is
+`onlyOwner` plus the treasury only ever approving the guard. And allowlisting
+trusts the address's controller, not the exact bytecode: a metamorphic redeploy
+can't swap code under an allowlisted address (dead since EIP-6780), but an
+upgradeable proxy can change behavior after vetting. In production the owner would
+be a separate signer or multisig with a timelock; here it runs from one key so
+the demo is one command.
 
 ## The demo villain
 
@@ -145,6 +158,51 @@ npm run guard-bad         # tries the honeypot -> BLOCK off-chain, then records 
                           #   REVIEW -> BLOCK. run it again -> "already blocked".
 ```
 
+## Pointing it at a recipient
+
+The agent needs the recipient's address (and optionally an amount). Either pass it
+straight in:
+
+```bash
+node src/agent.js guard 0xRecipient... 10
+```
+
+or set `GOOD_RECIPIENT` / `BAD_RECIPIENT` in `.env` and use `npm run guard-good` /
+`guard-bad`. A clean EOA gets paid; a first-time contract is held at REVIEW until
+you allowlist it (the CLI asks you first).
+
+## Integrating your own agent
+
+The whole integration is one swap - your agent calls the guard instead of moving
+USDC directly:
+
+```js
+// before Aegis:
+await usdc.write.transfer([recipient, amount])
+
+// with Aegis:
+import { guardedPay } from './src/guard.js'
+await guardedPay(recipient, amount)   // reverts on-chain unless the policy says PAY
+```
+
+Because the enforcement lives in the contract, that single call *is* the
+integration. Set it up once, as the owner:
+
+```bash
+npm run deploy-guard      # deploy AegisGuard, put its address in .env as AEGIS_GUARD
+npm run guard-setup       # treasury approves the guard + whitelists your agent
+```
+
+Keep the USDC in the treasury, which approves only the guard, and whitelist your
+agent's address. The agent holds a key but never the funds - that's what makes the
+policy impossible to route around.
+
+If you want a verdict before paying, `assessOnChain(recipient, amount)` is a free
+read and `aegisCheck(recipient, amount)` runs the full off-chain analysis
+(bytecode + LLM). Depending on your stack you can import these directly (Node/TS),
+put them behind a small HTTP endpoint (other languages), or expose `guardedPay` as
+the "pay" tool your LLM agent is given in place of a raw transfer.
+
 ## Tests
 
 ```bash
@@ -153,8 +211,9 @@ npm test
 
 Spins up a local `anvil` node, deploys a mock USDC + the guard + the honeypot,
 and drives every policy path through viem (allowed pay, non-agent rejected,
-denylist, unvetted contract, codehash kill-switch, daily-limit, owner-only
-setters). No fork, no testnet, no keys.
+denylist, unvetted contract, codehash kill-switch, recording a block verdict
+`REVIEW -> BLOCK`, allowlisting a vetted contract `REVIEW -> PAY`, daily-limit,
+owner-only setters). No fork, no testnet, no keys.
 
 ## Verifying the contract on Etherscan
 
@@ -183,9 +242,15 @@ way.
   runtime code will hash differently and slip past that one rule (it still hits
   the default "unvetted contract" REVIEW).
 - The off-chain analyzer can write the on-chain blocklist directly, which is fine
-  for a demo but is a trust boundary: a real deployment should put a human
-  confirmation or a timelock in front of that auto-write. It only ever tightens
-  policy, so a bad call fails closed (a refused payment), never open.
+  for a demo but is a trust boundary: the owner key lives in the same process as
+  the agent, so the interactive allow-confirmation is human-in-the-loop UX, not a
+  security boundary. A real deployment should make the owner a separate signer or
+  multisig with a timelock. Blocking fails closed (a refused payment); allowing
+  needs a human yes.
+- Allowlisting trusts the recipient address's controller, not the exact bytecode
+  vetted. A metamorphic redeploy can't swap code under an allowlisted address
+  (dead since EIP-6780), but an upgradeable proxy keeps its address and can change
+  behavior after vetting - re-vet contracts you do not control.
 - Sepolia and USDC only.
 
 ## Built with

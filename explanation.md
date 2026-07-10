@@ -86,9 +86,13 @@ Run `npm run guard-good` or `npm run guard-bad`. Here's the exact order.
    hasn't been told about.
 
 7. Then runGuard acts on the off-chain decision:
-   - **PAY** -> call `guardedPay(recipient, amount)`. This sends a real tx to
-     `AegisGuard.guardedPay`, which re-runs `assess()` *inside the contract*,
-     confirms Pay, and does `transferFrom(treasury -> recipient)`. USDC settles.
+   - **PAY** to an EOA (or an already-vetted contract) -> `guardedPay(recipient,
+     amount)`. This sends a real tx to `AegisGuard.guardedPay`, which re-runs
+     `assess()` *inside the contract*, confirms Pay, and does
+     `transferFrom(treasury -> recipient)`. USDC settles.
+   - **PAY** to a first-time contract -> the guard reads REVIEW (unvetted), so
+     `vetThenPay` asks the owner y/N; only on yes does it allowlist and then pay
+     (see "Block vs allow" below).
    - **BLOCK** -> call `recordVerdictOnChain(recipient)` (the bridge, see below).
      No payment is sent.
    - **ASK_HUMAN** -> stop, leave it for a person.
@@ -131,17 +135,37 @@ the treasury and the agent.
 
 ## Block vs allow - the asymmetry that matters
 
-The bridge only ever *tightens* policy:
+The two directions of the bridge are NOT symmetric, on purpose.
 
-- It can WRITE the blocklist (`blockedCodehash`, `denylisted`) automatically.
-- It NEVER writes the allowlist (`allowedContract`). Allowlisting is a *trust*
-  grant, and a human has to do that by hand (`setAllowedContract`).
+- **BLOCK is automatic.** When the analyzer + LLM are sure something is bad,
+  `recordVerdictOnChain` writes the blocklist (`blockedCodehash` / `denylisted`)
+  with no human in the loop. A wrong block just refuses a payment, which the owner
+  undoes in one tx - it fails closed.
+- **ALLOW needs a human.** When we judge a first-time contract safe, the guard
+  still reads REVIEW (it only trusts contracts it's been told about). The CLI
+  offers to allowlist it, but never silently: `vetThenPay` asks the owner y/N
+  first (`confirmOwner`), and if there's no interactive owner - piped, CI - it
+  defaults to NO. Only on an explicit yes does `allowlistOnChain` call
+  `setAllowedContract`, and then it re-reads `assess` and pays only if it is
+  actually PAY now (so a daily-limit REVIEW after allowlisting still won't send).
 
-Why: a false-positive that wrongly *blocks* a good address just refuses a payment
-- annoying, owner can undo it in one tx. A false-positive that wrongly *allows* a
-bad address would let money out. So the automatic path can only fail closed,
-never open. On a PAY, nothing is written to the allowlist - the payment just goes
-through. A contract nobody vetted stays REVIEW.
+Why the asymmetry: a wrong BLOCK just annoys; a wrong ALLOW lets money out. So the
+cheap-to-be-wrong direction is automated and the expensive one needs a person.
+(Trigger note: the "is this an unvetted contract?" check is computed from state -
+has code, not allowlisted - not by string-matching the REVIEW reason, so the CLI
+and the contract can't drift apart.)
+
+Two honest notes (say these out loud, they read as maturity):
+
+- The y/N is human-in-the-loop UX, not the security boundary. The owner key lives
+  in the same process as the agent, so the real boundary is `onlyOwner` plus the
+  fact that funds sit in a treasury that only ever approves the guard. In
+  production the owner would be a separate signer / multisig with a timelock.
+- Allowlisting trusts the address's *controller*, not the exact bytecode we
+  vetted. A metamorphic redeploy can't swap code under an allowlisted address
+  (dead since EIP-6780 on post-Dencun Sepolia), but an upgradeable proxy keeps the
+  same address and can change its behavior after vetting. That's inherent to any
+  allowlist - re-vet contracts you don't control.
 
 ## What can't be bypassed, and why
 
@@ -166,20 +190,50 @@ agents are triggers, never fund-holders.
 The analyzer holds the owner key and can write the blocklist. In a real
 deployment you'd separate those: the analyzer would only *propose* a block, and a
 human or a timelock would sign it. Here it writes directly so the demo is one
-command. And it's escalation-only, so the worst case is a refused payment.
+command. Blocking is escalation-only, so its worst case is a refused payment; the
+allow direction is the one that grants trust, which is exactly why it's gated
+behind an owner yes (see "Block vs allow" above).
 
 ## File map
 
 - `contracts/AegisGuard.sol` - the guard contract (assess, guardedPay, setters).
 - `contracts/HoneypotVault.sol` - the demo villain (Parity-freeze + tx.origin).
 - `contracts/MockERC20.sol` - fake USDC, tests only.
-- `src/agent.js` - the stand-in agent; `main()` + `runGuard()`.
+- `src/agent.js` - the stand-in agent; `main()`, `runGuard()`, and the
+  owner-confirmation flow `vetThenPay()` + `confirmOwner()`.
 - `src/aegis.js` - `aegisCheck`, the off-chain decision engine (3 lanes + LLM).
 - `src/lanes/bytecode.js` - the real opcode scanner.
 - `src/reasoning.js` - `reason()`, the LLM call (`claude -p`).
 - `src/guard.js` - talks to the contract: `assessOnChain`, `guardedPay`,
-  `setupGuard`, and `recordVerdictOnChain` (the bridge).
-- `test/guard.test.mjs` - anvil-backed end-to-end tests (10 cases).
+  `setupGuard`, the block bridge `recordVerdictOnChain`, the allow bridge
+  `allowlistOnChain`, and the `needsVetting` state check.
+- `test/guard.test.mjs` - anvil-backed end-to-end tests (11 cases).
+
+## Pointing the agent at a recipient
+
+To pay someone I give the agent their address (and optionally an amount). Either
+inline - `node src/agent.js guard 0xRecipient... 10` - or via `.env`
+(`GOOD_RECIPIENT` / `BAD_RECIPIENT`) with `npm run guard-good` / `guard-bad`. An
+EOA gets paid if it's clean; a first-time contract sits at REVIEW until the owner
+allowlists it.
+
+## Integrating my own agent
+
+The real integration is one swap: the agent calls `guardedPay(recipient, amount)`
+instead of `usdc.transfer(...)`. Because the enforcement is on-chain, that single
+call IS the integration - the guard re-runs the policy itself and reverts if it
+isn't PAY.
+
+Setup is one-time and done by the owner: `npm run deploy-guard` then
+`npm run guard-setup` (the treasury approves the guard and whitelists the agent).
+The money stays in the treasury, which approves only the guard; the agent holds a
+key but never funds, so it can trigger payments but can't route around the policy.
+
+Before paying I can read the verdict for free with `assessOnChain(recipient,
+amount)`, or run the full off-chain analysis with `aegisCheck(recipient, amount)`.
+How I call these depends on the stack: import them straight from Node/TS, wrap
+them behind a tiny HTTP endpoint for another language, or hand `guardedPay` to an
+LLM agent as its "pay" tool in place of a raw transfer.
 
 ## One-paragraph summary
 
