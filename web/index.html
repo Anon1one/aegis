@@ -159,6 +159,7 @@
       <h2>How it decides</h2>
       <pre class="flow"><span class="k">denylisted            -&gt;</span> <span class="block">BLOCK</span>
 <span class="k">dangerous bytecode    -&gt;</span> LLM reads it <span class="k">-&gt;</span> <span class="block">BLOCK</span> <span class="k">or</span> <span class="ask">ASK_HUMAN</span>
+<span class="k">unvetted contract     -&gt;</span> <span class="ask">REVIEW</span>
 <span class="k">big unknown payment   -&gt;</span> <span class="ask">ASK_HUMAN</span>
 <span class="k">all clear             -&gt;</span> <span class="pay">PAY</span></pre>
       <p class="sub" style="margin-top:16px">
@@ -176,6 +177,7 @@
         <li>The funds live in a <b>treasury</b> that approves the guard and nothing else, so a leaked agent key can't move money outside the policy.</li>
         <li><span class="mono">assess()</span> and the transfer run in one call, so there's <b>no gap</b> for the recipient to swap its code between the check and the payment.</li>
         <li>The three lanes map onto real contract state: a <b>denylist / allowlist</b>, a <b>codehash kill-switch</b>, and a rolling <b>daily spend cap</b>.</li>
+        <li>The two layers are <b>wired together</b>: when the analyzer is sure a recipient is malicious it writes that verdict into the guard - blocking the bytecode by <b>codehash</b> - so the contract enforces it even for an agent that never runs the off-chain check. The reverse, <b>trusting</b> a new contract, is deliberately gated behind an owner confirmation.</li>
       </ul>
       <p class="sub" style="margin-top:16px">
         Verified on Sepolia:
@@ -204,7 +206,7 @@
           <div class="top"><span class="cmd"><b>node</b> src/agent.js guard bad</span></div>
           <div class="body">
             <span class="banner">BLOCK</span>
-            <p class="why">The recipient is a honeypot: a <span class="mono">delegatecall</span> proxy with an owner <span class="mono">selfdestruct</span> and <span class="mono">tx.origin</span> auth (the Parity-freeze shape). The scan flags it HIGH, the LLM confirms the rug, and the guard returns REVIEW. <b>Nothing was sent.</b></p>
+            <p class="why">The recipient is a honeypot: a <span class="mono">delegatecall</span> proxy with an owner <span class="mono">selfdestruct</span> and <span class="mono">tx.origin</span> auth (the Parity-freeze shape). The scan flags it HIGH and the LLM confirms the rug. On-chain the guard starts at <b>REVIEW</b> (an unvetted contract) - so Aegis records the honeypot's codehash into the guard, and its own verdict flips <b>REVIEW &rarr; BLOCK</b> in the same run. <b>Nothing was sent, and the guard now blocks that bytecode on its own.</b></p>
             <p class="link"><a href="https://sepolia.etherscan.io/address/0xfe77c1e39923c3760ec8b20e64eb4639d1d8a00e#code">view the honeypot source</a></p>
           </div>
         </div>

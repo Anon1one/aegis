@@ -15,6 +15,8 @@ the recipient's bytecode and, when something looks off, asks an LLM about it),
 and an on-chain contract, `AegisGuard`, enforces the same policy at settlement
 so a compromised agent can't just route around the checker.
 
+**Live overview:** https://anon1one.github.io/aegis/web/
+
 ## On Sepolia
 
 Both contracts are verified, so you can read the source right on Etherscan.
