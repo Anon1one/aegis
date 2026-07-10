@@ -68,6 +68,38 @@ A few properties worth calling out:
 - code recipients are default-REVIEW: a plain EOA passes, but a contract has to be
   vetted (allowlisted) before it can be auto-paid. Conservative on purpose.
 
+## How the two layers connect
+
+The off-chain analyzer and the on-chain guard are not two separate opinions that
+happen to agree. They are wired together, in one direction: when the analyzer
+(the opcode scan plus the LLM) is confident a recipient is malicious, it writes
+that verdict into the guard's own state so the contract enforces it from then on -
+even for an agent that never runs the off-chain check.
+
+That is what `recordVerdictOnChain` in `src/guard.js` does. A contract recipient
+gets blocked by *codehash* (`setBlockedCodehash`), which kills every address
+running that exact bytecode, not just this one deployment. A plain wallet - or an
+EIP-7702 delegated EOA, which also carries code but shares it with everyone
+delegated to the same target - is denylisted by address instead. So the flow is:
+
+```
+off-chain analyzer + LLM decide BLOCK
+        -> recordVerdictOnChain() writes it via an owner setter
+        -> AegisGuard.assess() now returns BLOCK on its own, no off-chain call needed
+```
+
+You can watch this happen: the first `npm run guard-bad` finds the honeypot at
+`REVIEW` on-chain (an unvetted contract), records its codehash, and the on-chain
+verdict flips to `BLOCK` in the same run. A second run just reports it is already
+blocked and sends no transaction.
+
+One deliberate property: this bridge can only ever *tighten* the policy - it
+writes blocklists, never the allowlist. So the worst a false positive can do is
+refuse a payment, which the owner can undo with a single transaction. It fails
+closed, not open. In a real deployment you would gate that auto-write behind a
+human confirmation or a timelock; here it runs directly so the demo is one
+command.
+
 ## The demo villain
 
 `HoneypotVault.sol` is a deliberately malicious recipient, built to look like a
@@ -108,7 +140,9 @@ The on-chain guard demo:
 npm run deploy-guard      # deploy AegisGuard, paste address into .env as AEGIS_GUARD
 npm run guard-setup       # treasury approves the guard + whitelists you as an agent
 npm run guard-good        # pays a clean EOA through the guard -> real transfer settles
-npm run guard-bad         # tries the honeypot -> blocked off-chain, REVIEW on-chain
+npm run guard-bad         # tries the honeypot -> BLOCK off-chain, then records its
+                          #   codehash on-chain so the guard's own verdict flips
+                          #   REVIEW -> BLOCK. run it again -> "already blocked".
 ```
 
 ## Tests
@@ -144,6 +178,14 @@ way.
   conservative, but worth knowing.
 - The `_safeTransferFrom` path assumes a USDC-style token (returns a bool or no
   data). It's a USDC guard by design, not a universal one.
+- Blocking by codehash catches exact-bytecode redeploys, but a metamorphic
+  redeploy or a clone that bakes different constructor immutables into its
+  runtime code will hash differently and slip past that one rule (it still hits
+  the default "unvetted contract" REVIEW).
+- The off-chain analyzer can write the on-chain blocklist directly, which is fine
+  for a demo but is a trust boundary: a real deployment should put a human
+  confirmation or a timelock in front of that auto-write. It only ever tightens
+  policy, so a bad call fails closed (a refused payment), never open.
 - Sepolia and USDC only.
 
 ## Built with
