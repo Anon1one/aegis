@@ -1,7 +1,4 @@
-# Aegis - how it actually works (my notes)
-
-A plain-language walkthrough of the whole thing, so I can explain it to anyone
-(and to myself). No jargon where I can help it.
+# Aegis - how it actually works 
 
 ## The one-line idea
 
