@@ -1,0 +1,179 @@
+// end-to-end tests for AegisGuard against a local anvil node.
+// spins up anvil, deploys a mock USDC + the guard + the honeypot villain, and
+// drives every policy path through viem - the same library the agent uses. no
+// fork, no testnet, no keys: just `npm test`.
+import { test, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import {
+  createPublicClient, createWalletClient, http, parseUnits, keccak256, parseEventLogs,
+  ContractFunctionRevertedError,
+} from 'viem';
+import { foundry } from 'viem/chains';
+import { privateKeyToAccount } from 'viem/accounts';
+import { compileContract } from '../src/compile.js';
+
+const RPC = 'http://127.0.0.1:8545';
+
+// anvil's deterministic dev keys
+const PK = {
+  owner:    '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', // owner + treasury + agent
+  outsider: '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d', // not an agent
+  bob:      '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a', // a good EOA recipient
+};
+const owner = privateKeyToAccount(PK.owner);
+const outsider = privateKeyToAccount(PK.outsider);
+const bob = privateKeyToAccount(PK.bob).address;
+
+const pub = createPublicClient({ chain: foundry, transport: http(RPC) });
+const asOwner = createWalletClient({ account: owner, chain: foundry, transport: http(RPC) });
+const asOutsider = createWalletClient({ account: outsider, chain: foundry, transport: http(RPC) });
+
+const usd = (n) => parseUnits(String(n), 6);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const MOCK = compileContract('MockERC20.sol', 'MockERC20');
+const GUARD = compileContract('AegisGuard.sol', 'AegisGuard');
+const HONEY = compileContract('HoneypotVault.sol', 'HoneypotVault');
+
+let anvil;
+let usdc, guard, honeypot; // deployed addresses, fresh per test
+
+before(async () => {
+  anvil = spawn('anvil', ['--silent'], { stdio: 'ignore' });
+  for (let i = 0; i < 60; i++) {
+    try { await pub.getBlockNumber(); return; } catch { await sleep(100); }
+  }
+  throw new Error('anvil did not come up');
+});
+
+after(() => { if (anvil) anvil.kill(); });
+
+async function deploy(artifact, args = []) {
+  const hash = await asOwner.deployContract({ ...artifact, args, account: owner });
+  const receipt = await pub.waitForTransactionReceipt({ hash });
+  return receipt.contractAddress;
+}
+
+async function send(address, abi, functionName, args, account = owner) {
+  const wallet = account === owner ? asOwner : asOutsider;
+  const hash = await wallet.writeContract({ address, abi, functionName, args, account });
+  return pub.waitForTransactionReceipt({ hash });
+}
+
+async function assess(to, amount) {
+  const [verdict, reason] = await pub.readContract({
+    address: guard, abi: GUARD.abi, functionName: 'assess', args: [to, usd(amount)],
+  });
+  return { verdict: Number(verdict), reason }; // 0 Pay, 1 Block, 2 Review
+}
+
+// simulate a call and assert it reverts. `needle` is matched against the
+// decoded custom error name and its args (e.g. Denied's reason string), with
+// the raw message as a fallback.
+async function expectRevert(run, needle) {
+  try {
+    await run();
+  } catch (err) {
+    const revert = typeof err.walk === 'function'
+      ? err.walk((e) => e instanceof ContractFunctionRevertedError)
+      : null;
+    const parts = [err.shortMessage || err.message || String(err)];
+    if (revert?.data) {
+      parts.push(revert.data.errorName ?? '');
+      parts.push(JSON.stringify(revert.data.args ?? []));
+    }
+    const hay = parts.join(' | ');
+    assert.ok(hay.includes(needle), `expected revert with "${needle}", got: ${hay}`);
+    return;
+  }
+  assert.fail(`expected a revert containing "${needle}"`);
+}
+
+// fresh contracts before each test so spend accounting etc. never leaks across
+beforeEach(async () => {
+  usdc = await deploy(MOCK);
+  guard = await deploy(GUARD, [usdc, owner.address, usd(100)]); // daily limit 100
+  honeypot = await deploy(HONEY);
+
+  // fund the treasury and wire the guard up
+  await send(usdc, MOCK.abi, 'mint', [owner.address, usd(1_000_000)]);
+  await send(usdc, MOCK.abi, 'approve', [guard, usd(1_000_000)]);
+  await send(guard, GUARD.abi, 'setAgent', [owner.address, true]);
+});
+
+const V = { PAY: 0, BLOCK: 1, REVIEW: 2 };
+
+test('assess: a plain EOA within the limit is PAY', async () => {
+  const { verdict, reason } = await assess(bob, 10);
+  assert.equal(verdict, V.PAY);
+  assert.equal(reason, 'clear');
+});
+
+test('assess: an unvetted contract recipient is REVIEW', async () => {
+  const { verdict, reason } = await assess(honeypot, 10);
+  assert.equal(verdict, V.REVIEW);
+  assert.equal(reason, 'unvetted contract recipient');
+});
+
+test('assess: a denylisted recipient is BLOCK', async () => {
+  await send(guard, GUARD.abi, 'setDenylisted', [bob, true]);
+  const { verdict, reason } = await assess(bob, 10);
+  assert.equal(verdict, V.BLOCK);
+  assert.equal(reason, 'recipient denylisted');
+});
+
+test('guardedPay: an allowed payment moves USDC and emits Paid', async () => {
+  const before = await pub.readContract({ address: usdc, abi: MOCK.abi, functionName: 'balanceOf', args: [bob] });
+  const receipt = await send(guard, GUARD.abi, 'guardedPay', [bob, usd(10)]);
+  const after = await pub.readContract({ address: usdc, abi: MOCK.abi, functionName: 'balanceOf', args: [bob] });
+  assert.equal(after - before, usd(10));
+
+  const [paid] = parseEventLogs({ abi: GUARD.abi, eventName: 'Paid', logs: receipt.logs });
+  assert.equal(paid.args.to.toLowerCase(), bob.toLowerCase());
+  assert.equal(paid.args.amount, usd(10));
+});
+
+test('guardedPay: a non-agent caller is rejected', async () => {
+  await expectRevert(
+    () => pub.simulateContract({ address: guard, abi: GUARD.abi, functionName: 'guardedPay', args: [bob, usd(10)], account: outsider }),
+    'NotAgent',
+  );
+});
+
+test('guardedPay: paying the honeypot reverts (unvetted contract)', async () => {
+  await expectRevert(
+    () => pub.simulateContract({ address: guard, abi: GUARD.abi, functionName: 'guardedPay', args: [honeypot, usd(10)], account: owner }),
+    'unvetted contract recipient',
+  );
+});
+
+test('a blocked codehash overrides the allowlist', async () => {
+  // allow the honeypot address, so on its own it would pass...
+  await send(guard, GUARD.abi, 'setAllowedContract', [honeypot, true]);
+  assert.equal((await assess(honeypot, 10)).verdict, V.PAY);
+
+  // ...then block its whole bytecode family by codehash -> BLOCK wins
+  const code = await pub.getCode({ address: honeypot });
+  await send(guard, GUARD.abi, 'setBlockedCodehash', [keccak256(code), true]);
+  const { verdict, reason } = await assess(honeypot, 10);
+  assert.equal(verdict, V.BLOCK);
+  assert.equal(reason, 'recipient code is blocklisted');
+});
+
+test('behavior lane: spend past the daily limit is REVIEW', async () => {
+  // limit is 100; spend 60 first, then 60 more would cross it
+  await send(guard, GUARD.abi, 'guardedPay', [bob, usd(60)]);
+  assert.equal((await assess(bob, 60)).verdict, V.REVIEW);
+  await expectRevert(
+    () => pub.simulateContract({ address: guard, abi: GUARD.abi, functionName: 'guardedPay', args: [bob, usd(60)], account: owner }),
+    'over daily limit',
+  );
+});
+
+test('only the owner can change policy', async () => {
+  await expectRevert(
+    () => pub.simulateContract({ address: guard, abi: GUARD.abi, functionName: 'setDenylisted', args: [bob, true], account: outsider }),
+    'NotOwner',
+  );
+});
