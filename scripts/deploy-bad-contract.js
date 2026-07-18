@@ -2,7 +2,7 @@
 // contracts/HoneypotVault.sol, so the deployed code is real solidity output
 // (delegatecall proxy + selfdestruct + tx.origin) rather than a toy stub.
 // the bytecode lane flags it HIGH -> the engine BLOCKs paying it.
-import { publicClient, requireWallet } from '../src/config.js';
+import { publicClient, requireWallet, addressUrl } from '../src/config.js';
 import { compileContract } from '../src/compile.js';
 
 // danger opcodes we expect to see in the deployed runtime (sanity check)
@@ -35,7 +35,7 @@ async function main() {
   const code = await publicClient.getCode({ address: addr });
   console.log(`\nDeployed at: ${addr}`);
   console.log(`   runtime: ${code.length / 2 - 1} bytes, danger opcodes: ${dangerOpcodes(code).join(', ')}`);
-  console.log(`   etherscan: https://sepolia.etherscan.io/address/${addr}`);
+  console.log(`   explorer: ${addressUrl(addr)}`);
   console.log(`\nPut this in your .env:\n   BAD_RECIPIENT="${addr}"\n`);
 }
 

@@ -3,7 +3,7 @@
 // approving a shady spender that drains the wallet later. so aegis runs the
 // spender through the same checks as a payment recipient before we ever sign.
 import { parseUnits, erc20Abi } from 'viem';
-import { publicClient, requireWallet, addresses, assertAddress } from './config.js';
+import { publicClient, requireWallet, addresses, assertAddress, txUrl } from './config.js';
 
 // usdc is 6 decimals, cache it after the first read
 let _decimals = null;
@@ -40,7 +40,7 @@ export async function approveUSDC(spender, amount) {
   console.log(`  -> tx submitted: ${hash}`);
   console.log('  -> waiting for confirmation ...');
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  const url = `https://sepolia.etherscan.io/tx/${hash}`;
+  const url = txUrl(hash);
   console.log(`  -> ${receipt.status === 'success' ? 'CONFIRMED' : 'REVERTED'}  ${url}`);
 
   return { hash, status: receipt.status, url };

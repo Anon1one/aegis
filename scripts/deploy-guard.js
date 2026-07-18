@@ -7,7 +7,7 @@
 // 100 USDC - spend past it comes back REVIEW. paste the printed address into
 // .env as AEGIS_GUARD, then run guard-setup to approve + authorize.
 import { parseUnits } from 'viem';
-import { publicClient, requireWallet, addresses, assertAddress } from '../src/config.js';
+import { publicClient, requireWallet, addresses, assertAddress, addressUrl } from '../src/config.js';
 import { compileGuard } from '../src/compile.js';
 
 async function main() {
@@ -40,7 +40,7 @@ async function main() {
   const addr = receipt.contractAddress;
 
   console.log(`\nDeployed at: ${addr}`);
-  console.log(`   etherscan: https://sepolia.etherscan.io/address/${addr}`);
+  console.log(`   explorer: ${addressUrl(addr)}`);
   console.log(`\nPut this in your .env:\n   AEGIS_GUARD="${addr}"`);
   console.log('Then run:  npm run guard-setup\n');
 }

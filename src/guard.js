@@ -4,7 +4,7 @@
 // wiring: treasury approves the guard for USDC and the owner whitelists the
 // caller as an agent.
 import { parseUnits, erc20Abi, keccak256 } from 'viem';
-import { publicClient, requireWallet, addresses, assertAddress } from './config.js';
+import { publicClient, requireWallet, addresses, assertAddress, txUrl } from './config.js';
 import { compileGuard } from './compile.js';
 
 const VERDICT = ['PAY', 'BLOCK', 'REVIEW']; // matches enum Verdict order
@@ -80,7 +80,7 @@ export async function guardedPay(to, amount) {
 
   console.log(`  -> tx submitted: ${hash}`);
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  const url = `https://sepolia.etherscan.io/tx/${hash}`;
+  const url = txUrl(hash);
   console.log(`  -> ${receipt.status === 'success' ? 'CONFIRMED' : 'REVERTED'}  ${url}`);
 
   return { hash, status: receipt.status, url };
