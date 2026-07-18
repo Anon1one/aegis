@@ -24,6 +24,8 @@ const PK = {
 const owner = privateKeyToAccount(PK.owner);
 const outsider = privateKeyToAccount(PK.outsider);
 const bob = privateKeyToAccount(PK.bob).address;
+// stand-in for the agent's x402 float wallet (a plain EOA the treasury refills)
+const floatWallet = privateKeyToAccount('0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a').address;
 
 const pub = createPublicClient({ chain: foundry, transport: http(RPC) });
 const asOwner = createWalletClient({ account: owner, chain: foundry, transport: http(RPC) });
@@ -196,6 +198,24 @@ test('behavior lane: spend past the daily limit is REVIEW', async () => {
   assert.equal((await assess(bob, 60)).verdict, V.REVIEW);
   await expectRevert(
     () => pub.simulateContract({ address: guard, abi: GUARD.abi, functionName: 'guardedPay', args: [bob, usd(60)], account: owner }),
+    'over daily limit',
+  );
+});
+
+test('JIT float: refilling the x402 wallet draws on the same daily limit', async () => {
+  // x402 payments settle off-mempool, so the guard can't revert them directly.
+  // instead the agent's x402 wallet holds only a float that the treasury tops up
+  // THROUGH guardedPay - so its refills draw on the same daily cap. limit is 100:
+  // a 70 refill lands, but a second 70 refill would cross the cap and reverts.
+  // that is what bounds total x402 spend even though the guard isn't in its path.
+  await send(guard, GUARD.abi, 'guardedPay', [floatWallet, usd(70)]);
+  const funded = await pub.readContract({
+    address: usdc, abi: MOCK.abi, functionName: 'balanceOf', args: [floatWallet],
+  });
+  assert.equal(funded, usd(70));
+
+  await expectRevert(
+    () => pub.simulateContract({ address: guard, abi: GUARD.abi, functionName: 'guardedPay', args: [floatWallet, usd(70)], account: owner }),
     'over daily limit',
   );
 });

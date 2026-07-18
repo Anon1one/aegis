@@ -30,6 +30,7 @@ const {
   GOOD_RECIPIENT,
   BAD_RECIPIENT,
   AEGIS_GUARD,
+  X402_WALLET,
 } = process.env;
 
 // Arc has a public RPC baked into the chain def, so RPC_URL is optional there;
@@ -77,6 +78,9 @@ export const addresses = {
   good: GOOD_RECIPIENT,
   bad: BAD_RECIPIENT,
   guard: AEGIS_GUARD, // the deployed AegisGuard, set after deploy-guard
+  // the agent's x402 signing wallet - holds only a float, refilled via the guard.
+  // separate from the treasury on purpose (see ensureFloat in guard.js).
+  float: X402_WALLET,
 };
 
 // the EIP-712 domain of the USDC we sign x402 authorizations against. PINNED,

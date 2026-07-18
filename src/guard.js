@@ -3,7 +3,7 @@
 // USDC from the treasury through the guard, and setupGuard() does the one-time
 // wiring: treasury approves the guard for USDC and the owner whitelists the
 // caller as an agent.
-import { parseUnits, erc20Abi, keccak256 } from 'viem';
+import { parseUnits, formatUnits, erc20Abi, keccak256 } from 'viem';
 import { publicClient, requireWallet, addresses, assertAddress, txUrl } from './config.js';
 import { compileGuard } from './compile.js';
 
@@ -84,6 +84,92 @@ export async function guardedPay(to, amount) {
   console.log(`  -> ${receipt.status === 'success' ? 'CONFIRMED' : 'REVERTED'}  ${url}`);
 
   return { hash, status: receipt.status, url };
+}
+
+// ---- JIT float: the on-chain teeth under the x402 rail ----
+//
+// x402 payments settle off the mempool: the agent signs an EIP-3009
+// authorization and a facilitator pulls USDC from the agent's OWN wallet -
+// guardedPay is never in that path, so the on-chain guard can't revert an x402
+// payment. Enforcement there splits by what each layer can actually see:
+//   - QUALITATIVE policy (denylist / blocked-codehash / unvetted-contract vetting)
+//     is re-run OFF-chain in the signer hook (src/x402/signer.js runs aegisCheck
+//     on the real payTo). The guard's own on-chain lists do NOT reach the x402
+//     rail - the refill below pays the float wallet, not the merchant, so
+//     assess() never sees the merchant. The signer is that check for x402.
+//   - RATE is bounded on-chain: the x402 wallet never holds the treasury, only a
+//     small *float*, refilled ONLY through guardedPay - which is metered by the
+//     daily limit.
+//
+// Honest guarantee (not "can't be drained"): a compromised signer can spend the
+// whole current float in one shot, so instantaneous loss <= `target`; and it can
+// keep spending up to `dailyLimit` per day for as long as it stays compromised
+// AND funded. So the bound is a loss *rate* - at most (float + dailyLimit)/day -
+// with the refill line as the kill-switch: stop ensureFloat + rotate the wallet
+// on suspicion and total loss caps at the current float. It is an allowance, not
+// a vault. (We keep target <= dailyLimit below so a single drain never exceeds
+// the daily bound, and only ever top *up to* target so the float never
+// accumulates past it across days.)
+//
+// Invariant that keeps the cap accounting complete: the x402 wallet SIGNS, never
+// SENDS. In exact-scheme x402 the facilitator pays gas, so the float wallet never
+// spends USDC-gas out of band; if it ever submitted a tx itself, gas would drain
+// the float outside the cap.
+
+// the guarded USDC balance of an address, in 6-decimal base units.
+export async function usdcBalanceOf(who) {
+  const usdc = assertAddress('USDC_ADDRESS', addresses.usdc);
+  return publicClient.readContract({
+    address: usdc, abi: erc20Abi, functionName: 'balanceOf', args: [who],
+  });
+}
+
+// pure top-up decision, so the branch logic is testable without a chain. all
+// amounts are 6-dec base units. we refill only once the float dips below `min`
+// (not before every payment), and when we do we top it back up to `target`.
+export function floatPlan({ balance, target, min }) {
+  if (min > target) throw new Error(`float min (${min}) cannot exceed target (${target})`);
+  if (balance >= min) return { topUp: false, amount: 0n };
+  return { topUp: true, amount: target - balance };
+}
+
+// keep the x402 wallet's float above `min` by topping it up to `target` USDC,
+// but ONLY through guardedPay - so the refill is itself subject to the on-chain
+// daily limit. `target`/`min` are decimal USDC (e.g. 5 = 5 USDC); comparison is
+// in base units. if the top-up would cross the daily cap, guardedPay reverts on
+// chain and this throws - which is the point: the cap governs x402 spend too.
+export async function ensureFloat(wallet, { target, min } = {}) {
+  assertAddress('X402_WALLET', wallet);
+  if (target == null) throw new Error('ensureFloat needs a target float amount');
+  const targetUnits = parseUnits(String(target), 6);
+  const minUnits = parseUnits(String(min ?? target), 6);
+
+  // single-shot exposure == the float, and the float tops out at `target`. keep
+  // that under the daily cap so one drain can never exceed the daily bound. a
+  // limit of 0 means the cap is off, so there's nothing to check against.
+  const limit = await publicClient.readContract({
+    address: guardAddress(), abi: guardAbi(), functionName: 'dailyLimit',
+  });
+  if (limit !== 0n && targetUnits > limit) {
+    throw new Error(
+      `ensureFloat: target ${target} USDC exceeds the guard's daily limit ${formatUnits(limit, 6)} - ` +
+      `a single float drain could then exceed the daily bound. lower target to <= the limit.`,
+    );
+  }
+
+  const balance = await usdcBalanceOf(wallet);
+  const plan = floatPlan({ balance, target: targetUnits, min: minUnits });
+  if (!plan.topUp) {
+    return { toppedUp: false, balance, funded: 0n };
+  }
+
+  const amount = formatUnits(plan.amount, 6);
+  console.log(
+    `  -> x402 float ${formatUnits(balance, 6)} USDC below ${min ?? target}; refilling ${amount} through the guard ...`,
+  );
+  const pay = await guardedPay(wallet, amount); // metered by the daily cap
+  // `target` is the intended post-refill float, not a re-read balance.
+  return { toppedUp: true, target: targetUnits, funded: plan.amount, amount, pay };
 }
 
 // the bridge between the two layers. once the off-chain analyzer (opcode scan +
