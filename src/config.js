@@ -79,6 +79,16 @@ export const addresses = {
   guard: AEGIS_GUARD, // the deployed AegisGuard, set after deploy-guard
 };
 
+// the EIP-712 domain of the USDC we sign x402 authorizations against. PINNED,
+// not taken from the counterparty's 402 - a server that lies about name/version
+// only yields an invalid signature, but we don't let it choose what we sign.
+// Verified on-chain: Arc USDC reports name "USDC" / version "2"; Sepolia's
+// Circle USDC is "USD Coin" / "2". Override via env if a deployment differs.
+export const usdcDomain = {
+  name: process.env.USDC_DOMAIN_NAME || (chain.id === arcTestnet.id ? 'USDC' : 'USD Coin'),
+  version: process.env.USDC_DOMAIN_VERSION || '2',
+};
+
 export function assertAddress(label, value) {
   if (!value || !isAddress(value)) {
     throw new Error(`${label} is not a valid address: ${value ?? '(empty)'} - check your .env`);

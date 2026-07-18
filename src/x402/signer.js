@@ -7,22 +7,28 @@
 // firewall can't see it. On this rail the irreversible act is *creating the
 // signature*, so that is where Aegis has to stand.
 //
-// This wraps a viem account so the only way to produce an EIP-3009 signature is
-// through Aegis policy. The idea (per Fable) is that the agent is handed THIS
-// object, never the raw key - so a prompt-injected agent, which can only act
-// through the tools it's given, cannot sign a payment Aegis would refuse. (If
-// the whole process is compromised the raw key still leaks; that's what the
-// out-of-process signer + the on-chain float cap are for. We don't overclaim.)
+// This wraps a viem account into a restricted signer the agent is handed instead
+// of the raw key. It is a chokepoint only if it exposes NOTHING that can produce
+// a fund-moving signature outside policy, so we deny by default:
+//   - raw digest signing (sign), raw tx signing (signTransaction) and 7702
+//     delegation (signAuthorization) are disabled outright - each is a total
+//     bypass otherwise (sign any digest = forge any payment).
+//   - signTypedData is gated: any EIP-3009 payment must clear policy, and any
+//     OTHER typed data against our USDC (e.g. an EIP-2612 Permit granting an
+//     infinite allowance) is refused too - a Permit drains just as well.
+//   - generic typed data on other domains (logins, etc.) passes through.
 //
-// Enforcement here is two things, both fail-closed:
-//   1. hard invariants that don't need any network call - the signed authorization
-//      MUST be for our canonical USDC, on our chain, and short-lived.
-//   2. the same aegisCheck() verdict used everywhere else, run on the payTo.
+// This bounds a prompt-injected agent, which can only act through the tools it's
+// given. It does NOT stop a fully compromised process that reads the key from
+// memory - that is what the out-of-process signer and the on-chain float cap are
+// for. We don't claim otherwise.
 import { aegisCheck, DECISION } from '../aegis.js';
 import { chain, addresses, assertAddress } from '../config.js';
 
-// EIP-3009 primary types that actually move value. Any of these is a payment.
+// EIP-3009 primary types that move value - each must clear policy.
 const PAYMENT_TYPES = new Set(['TransferWithAuthorization', 'ReceiveWithAuthorization']);
+// only burns a nonce (cancels a prior authorization); safe to allow unguarded.
+const SAFE_TOKEN_TYPES = new Set(['CancelAuthorization']);
 
 // absolute cap on how far in the future a signed authorization may be valid.
 // PaymentRequirements carry a maxTimeoutSeconds, but we don't trust the server to
@@ -43,17 +49,25 @@ export class AegisPaymentRefused extends Error {
 // behavior lane thinks in whole USDC, so convert at this edge and keep every
 // on-the-wire number in base units.
 function baseUnitsToUsdc(value) {
-  return Number(BigInt(value)) / 1e6;
+  return Number(value) / 1e6;
 }
 
-// pull { to, value, validBefore } out of the typed-data message regardless of
-// whether the fields arrive as strings, numbers or bigints.
+// parse a numeric field, turning garbage into a REFUSAL, never a raw throw -
+// a hostile 402 must fail closed, not crash the agent.
+function safeBig(x, field) {
+  try {
+    return BigInt(x);
+  } catch {
+    throw new AegisPaymentRefused(`malformed ${field} in the authorization.`);
+  }
+}
+
 function readAuthorization(message) {
   return {
     to: message.to,
-    value: BigInt(message.value),
-    validAfter: BigInt(message.validAfter ?? 0),
-    validBefore: BigInt(message.validBefore ?? 0),
+    value: safeBig(message.value, 'value'),
+    validAfter: safeBig(message.validAfter ?? 0, 'validAfter'),
+    validBefore: safeBig(message.validBefore ?? 0, 'validBefore'),
     nonce: message.nonce,
   };
 }
@@ -65,31 +79,32 @@ async function assertPaymentAllowed({ domain, message }, { usdc, chainId, maxTtl
   // --- invariant 1: the asset. a hostile 402 can name any contract "USDC" and
   // have us sign EIP-712 against it. refuse unless the verifyingContract is the
   // exact USDC we guard. this is the single most important line here.
-  const signedAsset = String(domain.verifyingContract || '').toLowerCase();
+  const signedAsset = String(domain?.verifyingContract || '').toLowerCase();
   if (signedAsset !== usdc.toLowerCase()) {
     throw new AegisPaymentRefused(
-      `authorization is against ${domain.verifyingContract}, not the canonical USDC ${usdc}.`,
+      `authorization is against ${domain?.verifyingContract}, not the canonical USDC ${usdc}.`,
     );
   }
 
-  // --- invariant 2: the chain. don't sign an authorization scoped to another
-  // chain's USDC/domain.
-  if (Number(domain.chainId) !== chainId) {
+  // --- invariant 2: the chain.
+  if (Number(domain?.chainId) !== chainId) {
     throw new AegisPaymentRefused(
-      `authorization is for chainId ${domain.chainId}, not our chain ${chainId}.`,
+      `authorization is for chainId ${domain?.chainId}, not our chain ${chainId}.`,
     );
   }
 
-  // --- invariant 3: freshness. cap how long the signed payment stays spendable.
-  const ttl = auth.validBefore - BigInt(now);
-  if (auth.validBefore !== 0n && ttl > BigInt(maxTtl)) {
+  // --- invariant 3: freshness. require now < validBefore <= now + cap. a
+  // long-lived (or already-expired) authorization is refused outright.
+  if (!(auth.validBefore > BigInt(now) && auth.validBefore <= BigInt(now + maxTtl))) {
     throw new AegisPaymentRefused(
-      `authorization valid for ${ttl}s, over the ${maxTtl}s cap - a long-lived signature is a delayed drain.`,
+      `authorization validBefore ${auth.validBefore} is outside the allowed window (now ${now}, cap ${maxTtl}s).`,
     );
   }
+  if (auth.value <= 0n) {
+    throw new AegisPaymentRefused('authorization has a non-positive value.');
+  }
 
-  // --- the policy verdict: run the same firewall on the payTo. a contract
-  // recipient gets its bytecode read; a denylisted/known-bad one is refused.
+  // --- the policy verdict: run the same firewall on the payTo.
   const verdict = await check(auth.to, baseUnitsToUsdc(auth.value));
   if (verdict.decision !== DECISION.PAY) {
     throw new AegisPaymentRefused(
@@ -102,10 +117,7 @@ async function assertPaymentAllowed({ domain, message }, { usdc, chainId, maxTtl
   return { auth, verdict };
 }
 
-// wrap a viem account into an Aegis-guarded signer. it stays a drop-in account
-// (so it can be handed straight to x402's ExactEvmScheme(signer)), but any
-// EIP-3009 payment authorization has to clear policy before it's signed.
-// non-payment typed data (logins, generic EIP-712) passes straight through.
+// wrap a viem account into an Aegis-guarded signer.
 export function createAegisSigner(account, opts = {}) {
   const {
     usdc = assertAddress('USDC_ADDRESS', addresses.usdc),
@@ -116,19 +128,52 @@ export function createAegisSigner(account, opts = {}) {
     now = () => Math.floor(Date.now() / 1000),
   } = opts;
 
+  const usdcLower = usdc.toLowerCase();
+
   async function signTypedData(params) {
-    if (PAYMENT_TYPES.has(params.primaryType)) {
-      try {
+    const primaryType = params?.primaryType;
+    const onGuardedToken = String(params?.domain?.verifyingContract || '').toLowerCase() === usdcLower;
+
+    try {
+      if (PAYMENT_TYPES.has(primaryType)) {
+        // any EIP-3009 payment, on any asset - assertPaymentAllowed refuses
+        // unless it's our USDC, on our chain, fresh, positive, and PAY.
         await assertPaymentAllowed(params, { usdc, chainId, maxTtl, check, now: now() });
-      } catch (err) {
-        if (err instanceof AegisPaymentRefused && onRefuse) onRefuse(err);
-        throw err;
+      } else if (onGuardedToken && !SAFE_TOKEN_TYPES.has(primaryType)) {
+        // non-payment typed data on OUR token = a fund-moving primitive we don't
+        // model (Permit / approve-by-sig / anything new). refuse it.
+        throw new AegisPaymentRefused(
+          `signing '${primaryType}' typed-data on the guarded USDC is disabled (fund-moving primitive).`,
+        );
       }
+    } catch (err) {
+      if (err instanceof AegisPaymentRefused && onRefuse) onRefuse(err);
+      throw err;
     }
+    // payment cleared, or it's generic typed data on some other domain.
     return account.signTypedData(params);
   }
 
-  // keep everything else the account exposes (address, publicKey, signMessage,
-  // signTransaction, type, source) and only override the payment path.
-  return { ...account, signTypedData };
+  const deny = (what) => () => {
+    const err = new AegisPaymentRefused(`${what} is disabled on the Aegis signer.`);
+    if (onRefuse) onRefuse(err);
+    throw err;
+  };
+
+  // explicit surface: expose only what an x402 EVM signer needs, and nothing
+  // that can forge a signature. do NOT spread the account - that would re-expose
+  // sign / signTransaction / signAuthorization as one-call bypasses.
+  return {
+    address: account.address,
+    publicKey: account.publicKey,
+    type: account.type,
+    source: 'aegis',
+    signTypedData,
+    // EIP-191 personal_sign can't collide with an EIP-712 payment digest, so it's
+    // safe to keep for logins / SIWE.
+    signMessage: (args) => account.signMessage(args),
+    sign: deny('raw digest signing (sign)'),
+    signTransaction: deny('raw transaction signing (signTransaction)'),
+    signAuthorization: deny('EIP-7702 delegation (signAuthorization)'),
+  };
 }

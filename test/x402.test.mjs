@@ -107,3 +107,63 @@ test('non-payment typed data passes straight through', async () => {
   const sig = await signerWith(DECISION.BLOCK).signTypedData(login);
   assert.match(sig, /^0x[0-9a-f]{130}$/i);
 });
+
+test('refuses an EIP-2612 Permit on the guarded USDC (allowance drain)', async () => {
+  const permit = {
+    domain: { name: 'USDC', version: '2', chainId: CHAIN_ID, verifyingContract: USDC },
+    types: {
+      Permit: [
+        { name: 'owner', type: 'address' }, { name: 'spender', type: 'address' },
+        { name: 'value', type: 'uint256' }, { name: 'nonce', type: 'uint256' },
+        { name: 'deadline', type: 'uint256' },
+      ],
+    },
+    primaryType: 'Permit',
+    message: {
+      owner: account.address,
+      spender: '0x000000000000000000000000000000000000dEaD',
+      value: 2n ** 256n - 1n, nonce: 0n, deadline: 99999999999n,
+    },
+  };
+  // verdict PAY, but a Permit on our USDC is a fund-moving primitive: refuse.
+  await assert.rejects(
+    () => signerWith(DECISION.PAY).signTypedData(permit),
+    (e) => e instanceof AegisPaymentRefused && /disabled/.test(e.reason),
+  );
+});
+
+test('disables raw signing primitives (sign / signTransaction / signAuthorization)', () => {
+  const s = signerWith(DECISION.PAY);
+  assert.throws(() => s.sign({ hash: '0x' + '00'.repeat(32) }), AegisPaymentRefused);
+  assert.throws(() => s.signTransaction({}), AegisPaymentRefused);
+  assert.throws(() => s.signAuthorization({}), AegisPaymentRefused);
+});
+
+test('guards ReceiveWithAuthorization as well as Transfer', async () => {
+  const recv = {
+    ...payment(),
+    primaryType: 'ReceiveWithAuthorization',
+    types: { ReceiveWithAuthorization: TYPES.TransferWithAuthorization },
+  };
+  await assert.rejects(
+    () => signerWith(DECISION.BLOCK).signTypedData(recv),
+    (e) => e instanceof AegisPaymentRefused,
+  );
+});
+
+test('a malformed value is a refusal, not a raw crash', async () => {
+  const base = payment();
+  const bad = { ...base, message: { ...base.message, value: 'abc' } };
+  await assert.rejects(
+    () => signerWith(DECISION.PAY).signTypedData(bad),
+    (e) => e instanceof AegisPaymentRefused && /malformed/.test(e.reason),
+  );
+});
+
+test('TTL boundary: exactly the cap signs, one second over refuses', async () => {
+  await signerWith(DECISION.PAY).signTypedData(payment({ ttl: 120 })); // == cap, ok
+  await assert.rejects(
+    () => signerWith(DECISION.PAY).signTypedData(payment({ ttl: 121 })),
+    (e) => e instanceof AegisPaymentRefused,
+  );
+});
