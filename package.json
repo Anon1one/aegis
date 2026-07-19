@@ -16,7 +16,8 @@
     "guard-good": "node src/agent.js guard good",
     "guard-bad": "node src/agent.js guard bad",
     "test": "node --test test/*.test.mjs",
-    "x402-demo": "node src/x402-demo.js"
+    "x402-demo": "node src/x402-demo.js",
+    "drain": "node scripts/injected-drain.js"
   },
   "keywords": [
     "ethereum",
