@@ -47,7 +47,7 @@ const resp402Body = (opts) =>
   });
 const resp200 = () => new Response('ok', { status: 200 });
 
-function build({ decision = 'PAY', catalogEntries = [{ payTo: PAYTO, name: 'Test API', maxPrice: '10000' }], responses } = {}) {
+function build({ decision = 'PAY', catalogEntries = [{ payTo: PAYTO, name: 'Test API', maxPrice: '10000' }], responses, fetchOpts = {} } = {}) {
   const signer = createAegisSigner(account, {
     usdc: USDC, chainId: CHAIN_ID, now: () => NOW,
     check: async () => ({ decision, reasons: ['(injected)'] }),
@@ -55,7 +55,7 @@ function build({ decision = 'PAY', catalogEntries = [{ payTo: PAYTO, name: 'Test
   const fetchImpl = fakeFetch(responses);
   const aegisFetch = createAegisX402Fetch({
     signer, catalog: createCatalog(catalogEntries), fetchImpl,
-    usdc: USDC, chainId: CHAIN_ID, now: () => NOW,
+    usdc: USDC, chainId: CHAIN_ID, now: () => NOW, ...fetchOpts,
   });
   return { aegisFetch, fetchImpl };
 }
@@ -136,6 +136,90 @@ test('scans past a poison option to a later valid one', async () => {
   const res = await aegisFetch('https://api.test/data');
   assert.equal(res.status, 200);
   assert.equal(fetchImpl.calls.length, 2);
+});
+
+// ---- the per-payment cap: the ASK_HUMAN lane on the x402 rail ----
+// the catalog entry posts a high price so these payments are honest, just big.
+const bigService = [{ payTo: PAYTO, name: 'Pricey API', maxPrice: '10000' }];
+
+test('over the cap with no human wired in fails closed with ASK_HUMAN', async () => {
+  const { aegisFetch, fetchImpl } = build({
+    catalogEntries: bigService,
+    responses: [resp402Body([option()])],
+    fetchOpts: { maxPerPayment: 5000n },
+  });
+  await assert.rejects(() => aegisFetch('https://api.test/data'),
+    (e) => e instanceof AegisPaymentRefused && e.verdict === 'ASK_HUMAN' && /no human/.test(e.reason));
+  assert.equal(fetchImpl.calls.length, 1); // nothing signed
+});
+
+test('over the cap, human approves -> the payment proceeds', async () => {
+  const asked = [];
+  const { aegisFetch, fetchImpl } = build({
+    catalogEntries: bigService,
+    responses: [resp402Body([option()]), resp200()],
+    fetchOpts: { maxPerPayment: 5000n, askHuman: async (info) => { asked.push(info); return true; } },
+  });
+  const res = await aegisFetch('https://api.test/data');
+  assert.equal(res.status, 200);
+  assert.equal(fetchImpl.calls.length, 2);
+  // the human saw real context, not a bare yes/no
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].service.name, 'Pricey API');
+  assert.equal(asked[0].amount, 10000n);
+  assert.equal(asked[0].cap, 5000n);
+});
+
+test('over the cap, human declines -> refused with ASK_HUMAN, nothing signed', async () => {
+  const { aegisFetch, fetchImpl } = build({
+    catalogEntries: bigService,
+    responses: [resp402Body([option()])],
+    fetchOpts: { maxPerPayment: 5000n, askHuman: async () => false },
+  });
+  await assert.rejects(() => aegisFetch('https://api.test/data'),
+    (e) => e instanceof AegisPaymentRefused && e.verdict === 'ASK_HUMAN' && /declined/.test(e.reason));
+  assert.equal(fetchImpl.calls.length, 1);
+});
+
+test('a human yes does not bypass the signer - a BLOCK payTo still refuses', async () => {
+  // the property Aegis stands on: approval at the fetch layer clears the CAP,
+  // nothing else. hook B still runs the full verdict before any signature.
+  let asked = 0;
+  const { aegisFetch, fetchImpl } = build({
+    decision: 'BLOCK',
+    catalogEntries: bigService,
+    responses: [resp402Body([option()])],
+    fetchOpts: { maxPerPayment: 5000n, askHuman: async () => { asked++; return true; } },
+  });
+  await assert.rejects(() => aegisFetch('https://api.test/data'),
+    (e) => e instanceof AegisPaymentRefused && e.verdict === 'BLOCK');
+  assert.equal(asked, 1); // the human said yes...
+  assert.equal(fetchImpl.calls.length, 1); // ...and the signer still refused to sign.
+});
+
+test('an unknown payTo is refused before any human is asked', async () => {
+  // ordering matters: we never put "approve paying an unknown recipient?" in
+  // front of a person - unknown is a hard refusal, the cap question never comes.
+  let asked = 0;
+  const { aegisFetch } = build({
+    catalogEntries: [],
+    responses: [resp402Body([option()])],
+    fetchOpts: { maxPerPayment: 5000n, askHuman: async () => { asked++; return true; } },
+  });
+  await assert.rejects(() => aegisFetch('https://api.test/data'),
+    (e) => e instanceof AegisPaymentRefused && /not a service/.test(e.reason));
+  assert.equal(asked, 0);
+});
+
+test('under the cap the human is never bothered', async () => {
+  let asked = 0;
+  const { aegisFetch } = build({
+    responses: [resp402Body([option()]), resp200()],
+    fetchOpts: { maxPerPayment: 20000n, askHuman: async () => { asked++; return true; } },
+  });
+  const res = await aegisFetch('https://api.test/data');
+  assert.equal(res.status, 200);
+  assert.equal(asked, 0);
 });
 
 test('replies to a v1 (maxAmountRequired) 402 with a single X-PAYMENT header', async () => {

@@ -31,6 +31,7 @@ const {
   BAD_RECIPIENT,
   AEGIS_GUARD,
   X402_WALLET,
+  X402_PRIVATE_KEY,
 } = process.env;
 
 // Arc has a public RPC baked into the chain def, so RPC_URL is optional there;
@@ -63,6 +64,18 @@ if (PRIVATE_KEY && PRIVATE_KEY.trim() !== '') {
 export const account = _account;
 export const walletClient = _walletClient;
 
+// the x402 float wallet's OWN account. deliberately a second key: this wallet
+// signs EIP-3009 payment authorizations, so if it were the treasury key, every
+// x402 signature would be drawn against the whole treasury and the float
+// architecture would be pointless. it only ever signs - it never sends a tx -
+// so there's no wallet client for it, just the account.
+let _x402Account = null;
+if (X402_PRIVATE_KEY && X402_PRIVATE_KEY.trim() !== '') {
+  const key = X402_PRIVATE_KEY.startsWith('0x') ? X402_PRIVATE_KEY : `0x${X402_PRIVATE_KEY}`;
+  _x402Account = privateKeyToAccount(key);
+}
+export const x402Account = _x402Account;
+
 // call this before sending anything
 export function requireWallet() {
   if (!_walletClient || !_account) {
@@ -79,8 +92,9 @@ export const addresses = {
   bad: BAD_RECIPIENT,
   guard: AEGIS_GUARD, // the deployed AegisGuard, set after deploy-guard
   // the agent's x402 signing wallet - holds only a float, refilled via the guard.
-  // separate from the treasury on purpose (see ensureFloat in guard.js).
-  float: X402_WALLET,
+  // separate from the treasury on purpose (see ensureFloat in guard.js). if the
+  // key is present we derive the address from it, so the two can never disagree.
+  float: _x402Account?.address || X402_WALLET,
 };
 
 // the EIP-712 domain of the USDC we sign x402 authorizations against. PINNED,

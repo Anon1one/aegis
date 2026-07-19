@@ -15,7 +15,8 @@
     "approve-bad": "node src/agent.js approve bad",
     "guard-good": "node src/agent.js guard good",
     "guard-bad": "node src/agent.js guard bad",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "x402-demo": "node src/x402-demo.js"
   },
   "keywords": [
     "ethereum",

@@ -16,6 +16,7 @@
 // or malformed 402 must always fail closed with AegisPaymentRefused, never crash.
 import { randomBytes } from 'node:crypto';
 import { AegisPaymentRefused } from './signer.js';
+import { DECISION } from '../aegis.js';
 import { chain, addresses, assertAddress, usdcDomain } from '../config.js';
 
 const MAX_TTL_SECONDS = 120;
@@ -119,6 +120,16 @@ export function createAegisX402Fetch(opts = {}) {
     domain = usdcDomain, // pinned name/version, not taken from the server
     now = () => Math.floor(Date.now() / 1000),
     log = () => {},
+    // per-payment spend cap on the x402 rail, in base units (null = no cap).
+    // this cap is CLIENT-side policy: an x402 payment settles off the mempool,
+    // so the guard's on-chain dailyLimit can only meter the float refill - it
+    // cannot pause a single payment and ask anyone anything. this is where the
+    // ASK_HUMAN lane lives for x402: over the cap, we stop and put a human in
+    // the loop instead of silently paying or silently dropping.
+    maxPerPayment = null,
+    // async ({ service, amount, cap }) => boolean. no handler wired = nobody to
+    // ask = fail closed and refuse. the demo passes a readline y/N prompt here.
+    askHuman = null,
   } = opts;
 
   if (!signer) throw new Error('createAegisX402Fetch needs an Aegis signer');
@@ -185,6 +196,26 @@ export function createAegisX402Fetch(opts = {}) {
         `bait-and-switch: "${service.name}" is demanding ${option.amount} base units, over its posted ${service.maxPrice}.`,
       );
     }
+
+    // the price is honest but big: over the per-payment cap we don't decide
+    // alone - a human approves it or it doesn't happen. note the signer will
+    // STILL run its own checks after a yes; approval here doesn't bypass hook B.
+    if (maxPerPayment != null && option.amount > maxPerPayment) {
+      log(`  "${service.name}" costs ${option.amount} base units, over the ${maxPerPayment} per-payment cap - asking a human.`);
+      const approved = askHuman
+        ? await askHuman({ service, amount: option.amount, cap: maxPerPayment })
+        : false;
+      if (!approved) {
+        throw new AegisPaymentRefused(
+          askHuman
+            ? `human declined the over-cap payment (${option.amount} > cap ${maxPerPayment} base units).`
+            : `payment of ${option.amount} base units exceeds the per-payment cap ${maxPerPayment} and no human is wired in to approve it.`,
+          DECISION.ASK_HUMAN,
+        );
+      }
+      log('  human approved the over-cap payment.');
+    }
+
     log(`  known service "${service.name}", ${option.amount} <= posted ${service.maxPrice}. signing...`);
 
     // (B) sign through the guard, then replay the request with the payment. one
