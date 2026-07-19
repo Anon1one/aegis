@@ -2,7 +2,7 @@
 // building the hackathon MVP on; set CHAIN=sepolia to fall back to the original
 // Ethereum testnet deployment.
 import 'dotenv/config';
-import { createPublicClient, createWalletClient, http, isAddress, defineChain } from 'viem';
+import { createPublicClient, createWalletClient, http, fallback, isAddress, defineChain } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'viem/chains';
 
@@ -34,17 +34,32 @@ const {
   X402_PRIVATE_KEY,
 } = process.env;
 
-// Arc has a public RPC baked into the chain def, so RPC_URL is optional there;
-// Sepolia has no default we'd want to hardcode, so it stays required.
-const rpcUrl = RPC_URL || chain.rpcUrls.default.http[0];
-if (!rpcUrl) {
+// the public Arc gateways. the main one rate-limits under a demo's burst of
+// requests ("request limit reached"), so when no RPC_URL is pinned we rotate:
+// viem's fallback transport moves to the next gateway when one errors.
+const ARC_RPCS = [
+  'https://rpc.testnet.arc.network',
+  'https://rpc.drpc.testnet.arc.network',
+  'https://rpc.blockdaemon.testnet.arc.network',
+  'https://rpc.quicknode.testnet.arc.network',
+];
+
+// an explicit RPC_URL always wins (a dedicated endpoint behaves predictably);
+// otherwise Arc gets the gateway rotation, and Sepolia has no default we'd
+// want to hardcode, so there it stays required.
+const transport = RPC_URL
+  ? http(RPC_URL)
+  : chain.id === arcTestnet.id
+    ? fallback(ARC_RPCS.map((url) => http(url)))
+    : null;
+if (!transport) {
   throw new Error('RPC_URL missing in .env - copy .env.example to .env and fill it in.');
 }
 
 // read-only client, always available
 export const publicClient = createPublicClient({
   chain,
-  transport: http(rpcUrl),
+  transport,
 });
 
 // only build the wallet if a key is present, so balance/bytecode checks
@@ -57,7 +72,7 @@ if (PRIVATE_KEY && PRIVATE_KEY.trim() !== '') {
   _walletClient = createWalletClient({
     account: _account,
     chain,
-    transport: http(rpcUrl),
+    transport,
   });
 }
 
